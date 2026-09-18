@@ -44,21 +44,38 @@ DISABLE_AUTO_UPDATE="false"
 DISABLE_WEB_SSH="false"
 IGNORE_UNSAFE_CERT="false"
 DISABLE_MOTD="true"
+INCLUDE_NICS=""
+EXCLUDE_NICS=""
+CUSTOM_DNS=""
+ENABLE_GPU="false"
+DISABLE_COMPRESSION="false"
+PREFER_IP_VERSION="auto"
 
 print_help() {
     cat << EOF
 Usage: bash install.sh [OPTIONS]
 
 Options:
-    -e, --endpoint <URL>        Komari server endpoint (e.g., https://komari.example.com)
-    -t, --token <TOKEN>         Komari agent authentication token
-    -i, --interval <SECONDS>    Report interval in seconds (default: 3)
-    -a, --auto-discovery <KEY>  Auto discovery secret key
-    --no-motd-suppress          Do not suppress SSH login MOTD prompts
-    -h, --help                  Show this help message
+    -e, --endpoint <URL>            Komari server endpoint (e.g., https://komari.example.com)
+    -t, --token <TOKEN>            Komari agent authentication token
+    -i, --interval <SECONDS>       Report interval in seconds (default: 3)
+    -a, --auto-discovery <KEY>     Auto discovery secret key
+    -u, --ignore-unsafe-cert       Ignore invalid or self-signed TLS certificates
+    --install-dir <DIR>            Custom installation directory (default: /opt/komari-agent)
+    --install-service-name <NAME>  Custom systemd service name (default: komari-agent)
+    --disable-auto-update          Disable automatic updates
+    --disable-web-ssh              Disable remote web SSH console
+    --enable-gpu                   Enable detailed GPU metrics reporting
+    --disable-compression          Disable gzip/brotli transport compression
+    --prefer-ip-version <4|6|auto> IP version preference
+    --include-nics <NICS>          Comma-separated list of network interfaces to include
+    --exclude-nics <NICS>          Comma-separated list of network interfaces to exclude
+    --custom-dns <DNS>             Custom DNS resolver server
+    --no-motd-suppress             Do not suppress SSH login MOTD prompts
+    -h, --help                     Show this help message
 
 Examples:
-    curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh | bash -s -- -e "https://monitor.example.com" -t "your-token"
+    curl -kfsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh | sudo bash -s -- -e "https://www.xuanying.dpdns.org" --auto-discovery "8aj6DlGdRJDFxgGCi0CVkuxe" --ignore-unsafe-cert --install-service-name sser
 EOF
 }
 
@@ -78,6 +95,50 @@ while [[ $# -gt 0 ]]; do
             ;;
         -a|--auto-discovery)
             AUTO_DISCOVERY="$2"
+            shift 2
+            ;;
+        -u|--ignore-unsafe-cert)
+            IGNORE_UNSAFE_CERT="true"
+            shift
+            ;;
+        --install-dir)
+            INSTALL_DIR="$2"
+            shift 2
+            ;;
+        --install-service-name)
+            SERVICE_NAME="$2"
+            shift 2
+            ;;
+        --disable-auto-update)
+            DISABLE_AUTO_UPDATE="true"
+            shift
+            ;;
+        --disable-web-ssh)
+            DISABLE_WEB_SSH="true"
+            shift
+            ;;
+        --enable-gpu)
+            ENABLE_GPU="true"
+            shift
+            ;;
+        --disable-compression)
+            DISABLE_COMPRESSION="true"
+            shift
+            ;;
+        --prefer-ip-version)
+            PREFER_IP_VERSION="$2"
+            shift 2
+            ;;
+        --include-nics)
+            INCLUDE_NICS="$2"
+            shift 2
+            ;;
+        --exclude-nics)
+            EXCLUDE_NICS="$2"
+            shift 2
+            ;;
+        --custom-dns)
+            CUSTOM_DNS="$2"
             shift 2
             ;;
         --no-motd-suppress)
@@ -173,7 +234,14 @@ chmod +x "${BIN_NAME}"
 
 # Write configuration file config.json (CRITICAL: prevents top/ps token leakage)
 log_info "Creating secure config.json (0600 mode) to prevent top/ps credential exposure..."
-cat << EOF > "${INSTALL_DIR}/config.json"
+CONFIG_DIR="${INSTALL_DIR}"
+# If user specifies a system binary directory like /usr/bin or /usr/local/bin, save config to /etc/komari
+if [ "${INSTALL_DIR}" = "/usr/bin" ] || [ "${INSTALL_DIR}" = "/usr/local/bin" ] || [ "${INSTALL_DIR}" = "/bin" ]; then
+    CONFIG_DIR="/etc/komari"
+    mkdir -p "${CONFIG_DIR}"
+fi
+
+cat << EOF > "${CONFIG_DIR}/config.json"
 {
   "endpoint": "${ENDPOINT}",
   "token": "${TOKEN}",
@@ -182,10 +250,16 @@ cat << EOF > "${INSTALL_DIR}/config.json"
   "disable_auto_update": ${DISABLE_AUTO_UPDATE},
   "disable_web_ssh": ${DISABLE_WEB_SSH},
   "ignore_unsafe_cert": ${IGNORE_UNSAFE_CERT},
+  "include_nics": "${INCLUDE_NICS}",
+  "exclude_nics": "${EXCLUDE_NICS}",
+  "custom_dns": "${CUSTOM_DNS}",
+  "enable_gpu": ${ENABLE_GPU},
+  "disable_compression": ${DISABLE_COMPRESSION},
+  "prefer_ip_version": "${PREFER_IP_VERSION}",
   "disable_motd": ${DISABLE_MOTD}
 }
 EOF
-chmod 600 "${INSTALL_DIR}/config.json"
+chmod 600 "${CONFIG_DIR}/config.json"
 
 # Suppress MOTD login banners if enabled
 if [ "$DISABLE_MOTD" = "true" ]; then
@@ -207,16 +281,16 @@ if command -v systemctl >/dev/null 2>&1; then
     log_info "Configuring systemd service (/etc/systemd/system/${SERVICE_NAME}.service)..."
     cat << EOF > /etc/systemd/system/${SERVICE_NAME}.service
 [Unit]
-Description=Komari Agent Service (ziqing2022/komari-agent)
+Description=Komari Agent Service (${SERVICE_NAME})
 After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=${INSTALL_DIR}
+WorkingDirectory=${CONFIG_DIR}
 # Starts WITHOUT passing sensitive command-line parameters (token/endpoint)
 # All configurations are loaded directly from config.json to hide them from 'top' and 'ps'
-ExecStart=${INSTALL_DIR}/${BIN_NAME} --config ${INSTALL_DIR}/config.json
+ExecStart=${INSTALL_DIR}/${BIN_NAME} --config ${CONFIG_DIR}/config.json
 Restart=always
 RestartSec=5
 KillMode=process
@@ -232,10 +306,10 @@ EOF
 
     log_success "Komari Agent service started and enabled successfully!"
     log_info "Service status check: systemctl status ${SERVICE_NAME}"
-    log_info "Notice: When running 'top' or 'ps aux | grep komari-agent', no sensitive token or URL will appear!"
+    log_info "Notice: When running 'top' or 'ps aux | grep ${BIN_NAME}', no sensitive token or URL will appear!"
 else
     log_warn "systemd not detected. You can start the agent manually in the background without parameters:"
-    echo "  nohup ${INSTALL_DIR}/${BIN_NAME} --config ${INSTALL_DIR}/config.json > /dev/null 2>&1 &"
+    echo "  nohup ${INSTALL_DIR}/${BIN_NAME} --config ${CONFIG_DIR}/config.json > /dev/null 2>&1 &"
 fi
 
 echo ""
