@@ -117,6 +117,36 @@ sudo systemctl restart sshd`;
               <strong>解决方案：</strong>Agent 已自动将配置加密保存在当前目录下的 <code className="text-emerald-400">config.json</code>（权限 0600）。并且程序启动时将自身进程名直接重命名为 <code className="text-emerald-400">komari-agent</code>。无需在命令行中传入任何参数即可直接启动！
             </p>
 
+            {/* One-click install command */}
+            <div className="mt-4 space-y-2 border-t border-neutral-800/60 pt-3">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[11px] text-neutral-300 flex items-center gap-1.5">
+                  <Terminal className="h-3.5 w-3.5 text-rose-400" />
+                  专属一键静默安装命令 (从 ziqing2022/komari-agent 安装)
+                </span>
+                <button
+                  onClick={() => handleCopy(`curl -sSL https://raw.githubusercontent.com/ziqing2022/komari-agent/main/install.sh | sudo bash -s -- -e "${config.endpoint || 'https://your-domain.com'}" -t "${config.token || 'your-token'}"`, 'oneclick')}
+                  className="flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300"
+                >
+                  {copiedSection === 'oneclick' ? (
+                    <>
+                      <Check className="h-3.5 w-3.5" /> 已复制命令
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5" /> 复制安装命令
+                    </>
+                  )}
+                </button>
+              </div>
+              <pre className="rounded-lg border border-neutral-800 bg-neutral-900 p-2.5 font-mono text-[11px] text-emerald-300 overflow-x-auto break-all">
+                {`curl -sSL https://raw.githubusercontent.com/ziqing2022/komari-agent/main/install.sh | sudo bash -s -- -e "${config.endpoint || 'https://your-domain.com'}" -t "${config.token ? (config.token.length > 8 ? config.token.slice(0, 4) + '****' + config.token.slice(-4) : '****') : 'your-token'}"`}
+              </pre>
+              <p className="text-[10px] text-neutral-500">
+                提示：脚本会自动拉取你仓库构建的最新 release 二进制，并将配置写入 /opt/komari-agent/config.json，以无参形式注册为守护进程，彻底避免 top 泄露。
+              </p>
+            </div>
+
             {/* Zero argument systemd */}
             <div className="mt-3 space-y-2">
               <div className="flex items-center justify-between">

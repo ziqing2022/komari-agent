@@ -1,5 +1,19 @@
 # komari-agent
 
+> 专为隐私与安全优化的 Komari Agent (Fork 仓库: `ziqing2022/komari-agent`)
+> 
+> **优化亮点**：
+> - 自动创建并加载权限为 `0600` 的 `config.json`，Systemd 服务以无参形式启动，**彻底避免在服务器 `top`、`htop`、`ps aux` 中泄露 Endpoint 和 Token**。
+> - 安装时自动配置 `~/.hushlogin`，**彻底去除 SSH 登录服务器时的 MOTD 欢迎标语与提示**。
+
+## 一键安装命令 (推荐)
+
+使用当前仓库专属的一键安装脚本，自动下载安装并配置安全守护进程：
+
+```bash
+curl -sSL https://raw.githubusercontent.com/ziqing2022/komari-agent/main/install.sh | sudo bash -s -- -e "https://你的komari面板地址" -t "你的Token"
+```
+
 ## 配置方式
 
 agent 参数可以通过命令行参数、环境变量或 JSON 配置文件传入。
