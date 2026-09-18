@@ -1,0 +1,8 @@
+{
+  "name": "Komari Agent",
+  "description": "Cross-platform server monitoring agent probe and management dashboard implementing the Komari v2 JSON-RPC protocol.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
