@@ -38,8 +38,11 @@ jobs:
         goarch: [amd64, arm64, 386, arm]
 
     steps:
-      - name: Checkout code
+      - name: Checkout agent source code
         uses: actions/checkout@v4
+        with:
+          repository: 'komari-monitor/komari-agent'
+          ref: 'main'
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -65,7 +68,7 @@ jobs:
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
             true
           fi
-          go build -trimpath -ldflags="-X github.com/ziqing2022/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
+          go build -trimpath -ldflags="-X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
 
       - name: Upload binary to release
         env:
