@@ -3,13 +3,22 @@ name: Release Binaries
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag (e.g. v1.2.10)'
+        required: false
+        default: 'v1.2.10'
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
 
 jobs:
   build-and-attach:
-    if: ${{ !github.event.release.prerelease }}
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || !github.event.release.prerelease }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -41,26 +50,40 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-          VERSION: ${{ github.event.release.tag_name }}
         run: |
+          VERSION="${{ github.event.release.tag_name || inputs.tag_name }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -z "$VERSION" ]; then
+            VERSION="v1.2.10"
+          fi
           BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BINARY_NAME=${BINARY_NAME}.exe
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
-            # macOS binaries typically do not have a file extension
             true
           fi
-            go build -trimpath -ldflags="-X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
+          go build -trimpath -ldflags="-X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
 
       - name: Upload binary to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          VERSION="${{ github.event.release.tag_name || inputs.tag_name }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -z "$VERSION" ]; then
+            VERSION="v1.2.10"
+          fi
           BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BINARY_NAME=${BINARY_NAME}.exe
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
             true
           fi
-          gh release upload ${{ github.event.release.tag_name }} $BINARY_NAME --repo ${{ github.repository }}
+          # Ensure release exists (if triggered manually or via tag push), then upload
+          gh release view "$VERSION" --repo ${{ github.repository }} || gh release create "$VERSION" --title "$VERSION" --generate-notes --repo ${{ github.repository }}
+          gh release upload "$VERSION" "$BINARY_NAME" --clobber --repo ${{ github.repository }}
         shell: bash

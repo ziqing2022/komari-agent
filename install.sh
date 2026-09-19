@@ -204,30 +204,32 @@ log_info "Detected OS: ${OS}, Arch: ${ARCH} (Target binary: ${TARGET_BINARY})"
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-# Download binary from ziqing2022/komari-agent release
-DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/latest/download/${TARGET_BINARY}"
-log_info "Downloading binary from: ${DOWNLOAD_URL}"
+# Download binary: First try ziqing2022/komari-agent, fallback to komari-monitor/komari-agent
+PRIMARY_DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/latest/download/${TARGET_BINARY}"
+UPSTREAM_DOWNLOAD_URL="https://github.com/komari-monitor/komari-agent/releases/latest/download/${TARGET_BINARY}"
 
-if command -v curl >/dev/null 2>&1; then
-    if ! curl -fSL --retry 3 "${DOWNLOAD_URL}" -o "${BIN_NAME}"; then
-        log_warn "Download latest release failed. Attempting fallback or check repository releases at: https://github.com/${GITHUB_REPO}/releases"
-        # If binary already existed locally or backup exists
+download_file() {
+    local url="$1"
+    local output="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fSL --retry 2 "$url" -o "$output"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --tries=2 "$url" -O "$output"
+    else
+        return 1
+    fi
+}
+
+log_info "Downloading binary from: ${PRIMARY_DOWNLOAD_URL}"
+if ! download_file "${PRIMARY_DOWNLOAD_URL}" "${BIN_NAME}"; then
+    log_warn "Primary release at ${GITHUB_REPO} not found or has no release build yet. Falling back to upstream komari-monitor..."
+    log_info "Downloading fallback binary from: ${UPSTREAM_DOWNLOAD_URL}"
+    if ! download_file "${UPSTREAM_DOWNLOAD_URL}" "${BIN_NAME}"; then
         if [ ! -f "${BIN_NAME}" ]; then
-            log_error "Failed to download binary from ${DOWNLOAD_URL}."
+            log_error "Failed to download binary from both primary and upstream sources."
             exit 1
         fi
     fi
-elif command -v wget >/dev/null 2>&1; then
-    if ! wget -q --tries=3 "${DOWNLOAD_URL}" -O "${BIN_NAME}"; then
-        log_warn "Download latest release failed via wget."
-        if [ ! -f "${BIN_NAME}" ]; then
-            log_error "Failed to download binary from ${DOWNLOAD_URL}."
-            exit 1
-        fi
-    fi
-else
-    log_error "Neither curl nor wget found. Please install curl or wget first."
-    exit 1
 fi
 
 chmod +x "${BIN_NAME}"
