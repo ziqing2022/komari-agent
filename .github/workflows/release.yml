@@ -52,38 +52,9 @@ jobs:
       - name: Strip all MOTD warning logic from source code
         run: |
           echo "Disabling all MOTD warnings in Go source..."
-          # Replace startSecurityWarning in cmd/warn_linux.go with a no-op function that returns an empty cleanup function
-          cat << 'EOF' > cmd/warn_linux.go
-//go:build linux
-package cmd
-
-import "context"
-
-func startSecurityWarning(ctx context.Context) func() {
-	return func() {}
-}
-EOF
-          # Also neutralize cmd/warn_windows.go and cmd/warn_other.go to ensure clean zero-warning builds
-          cat << 'EOF' > cmd/warn_windows.go
-//go:build windows
-package cmd
-
-import "context"
-
-func startSecurityWarning(ctx context.Context) func() {
-	return func() {}
-}
-EOF
-          cat << 'EOF' > cmd/warn_other.go
-//go:build !linux && !windows
-package cmd
-
-import "context"
-
-func startSecurityWarning(ctx context.Context) func() {
-	return func() {}
-}
-EOF
+          printf '//go:build linux\npackage cmd\n\nimport "context"\n\nfunc startSecurityWarning(ctx context.Context) func() {\n\treturn func() {}\n}\n' > cmd/warn_linux.go
+          printf '//go:build windows\npackage cmd\n\nimport "context"\n\nfunc startSecurityWarning(ctx context.Context) func() {\n\treturn func() {}\n}\n' > cmd/warn_windows.go
+          printf '//go:build !linux && !windows\npackage cmd\n\nimport "context"\n\nfunc startSecurityWarning(ctx context.Context) func() {\n\treturn func() {}\n}\n' > cmd/warn_other.go
 
       - name: Build binary
         env:
