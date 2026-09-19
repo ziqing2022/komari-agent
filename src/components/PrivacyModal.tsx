@@ -23,8 +23,13 @@ export const PrivacyModal: React.FC<PrivacyModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       fetch('/api/agent/systemd-service')
-        .then((res) => res.json())
+        .then((res) => {
+          const contentType = res.headers.get('content-type') || '';
+          if (!res.ok || !contentType.includes('application/json')) return null;
+          return res.json();
+        })
         .then((data) => {
+          if (!data) return;
           if (data.serviceFile) setSystemdService(data.serviceFile);
           if (data.installInstructions) setInstructions(data.installInstructions);
         })
@@ -44,6 +49,10 @@ export const PrivacyModal: React.FC<PrivacyModalProps> = ({
     setMotdStatus({ loading: true, message: null });
     try {
       const res = await fetch('/api/agent/suppress-motd', { method: 'POST' });
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        throw new Error(`Server returned status ${res.status}`);
+      }
       const data = await res.json();
       setMotdStatus({
         loading: false,

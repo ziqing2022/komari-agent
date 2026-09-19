@@ -660,7 +660,7 @@ async function startServer() {
   // -------------------------------------------------------------
   // 3. Agent Management REST Endpoints
   // -------------------------------------------------------------
-  app.get('/api/agent/status', (req, res) => {
+  app.get(['/api/agent/status', '/api/agent/state'], (req, res) => {
     const uptimeSeconds = Math.floor((Date.now() - agentStartTime) / 1000);
     res.json({
       running: isAgentRunning,
@@ -865,6 +865,11 @@ WantedBy=multi-user.target
   // -------------------------------------------------------------
   // 4. Vite Middleware (Dev) vs Static Files (Prod)
   // -------------------------------------------------------------
+  // Explicit 404 JSON response for any unhandled /api/* routes so they never fall through to HTML fallback
+  app.all('/api/*', (req, res) => {
+    res.status(404).json({ error: 'Endpoint not found', path: req.path });
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

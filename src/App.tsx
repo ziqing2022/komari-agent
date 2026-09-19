@@ -7,6 +7,19 @@ import { LogsAndPayloads } from './components/LogsAndPayloads';
 import { AutoDiscoveryModal } from './components/AutoDiscoveryModal';
 import { PrivacyModal } from './components/PrivacyModal';
 
+// Helper for robust JSON fetching that guards against non-JSON (HTML 404/500/Vite fallback) responses
+async function safeFetchJson<T = any>(url: string, init?: RequestInit): Promise<T | null> {
+  try {
+    const res = await fetch(url, init);
+    if (!res.ok) return null;
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 export const App: React.FC = () => {
   const [config, setConfig] = useState<AgentConfig>({
     endpoint: 'http://localhost:3000',
@@ -30,28 +43,22 @@ export const App: React.FC = () => {
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Fetch agent status & configuration
+  // Fetch agent status & configuration with safe JSON parsing
   const fetchAgentData = useCallback(async () => {
     try {
-      const [statusRes, configRes, metricsRes, logsRes, receivedRes] = await Promise.all([
-        fetch('/api/agent/status'),
-        fetch('/api/agent/config'),
-        fetch('/api/agent/metrics'),
-        fetch('/api/agent/logs'),
-        fetch('/api/mock/received-reports'),
+      const [statusData, configData, metricsData, logsData, receivedData] = await Promise.all([
+        safeFetchJson<AgentStatus>('/api/agent/status'),
+        safeFetchJson<AgentConfig>('/api/agent/config'),
+        safeFetchJson<SystemMetrics>('/api/agent/metrics'),
+        safeFetchJson<{ logs: AgentLog[] }>('/api/agent/logs'),
+        safeFetchJson<{ reports: ReceivedReport[] }>('/api/mock/received-reports'),
       ]);
 
-      if (statusRes.ok) setStatus(await statusRes.json());
-      if (configRes.ok) setConfig(await configRes.json());
-      if (metricsRes.ok) setMetrics(await metricsRes.json());
-      if (logsRes.ok) {
-        const data = await logsRes.json();
-        setLogs(data.logs || []);
-      }
-      if (receivedRes.ok) {
-        const data = await receivedRes.json();
-        setReceivedReports(data.reports || []);
-      }
+      if (statusData) setStatus(statusData);
+      if (configData) setConfig(configData);
+      if (metricsData) setMetrics(metricsData);
+      if (logsData?.logs) setLogs(logsData.logs);
+      if (receivedData?.reports) setReceivedReports(receivedData.reports);
     } catch (err) {
       console.error('Error polling agent state:', err);
     }
@@ -66,13 +73,12 @@ export const App: React.FC = () => {
   // Handlers
   const handleUpdateConfig = async (newConfig: Partial<AgentConfig>) => {
     try {
-      const res = await fetch('/api/agent/config', {
+      const data = await safeFetchJson<{ success: boolean; config: AgentConfig }>('/api/agent/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newConfig),
       });
-      if (res.ok) {
-        const data = await res.json();
+      if (data?.config) {
         setConfig(data.config);
         fetchAgentData();
       }
@@ -84,10 +90,8 @@ export const App: React.FC = () => {
   const handleToggleRun = async () => {
     const action = status?.running ? 'stop' : 'start';
     try {
-      const res = await fetch(`/api/agent/${action}`, { method: 'POST' });
-      if (res.ok) {
-        fetchAgentData();
-      }
+      await fetch(`/api/agent/${action}`, { method: 'POST' });
+      fetchAgentData();
     } catch (err) {
       console.error(`Failed to ${action} agent:`, err);
     }
@@ -148,6 +152,10 @@ export const App: React.FC = () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ server, adkey, name }),
     });
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error(`Server returned HTTP ${res.status}`);
+    }
     const data = await res.json();
     if (!res.ok || !data.success) {
       throw new Error(data.error || 'Failed to auto-discover');
