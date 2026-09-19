@@ -49,7 +49,7 @@ EXCLUDE_NICS=""
 CUSTOM_DNS=""
 ENABLE_GPU="false"
 DISABLE_COMPRESSION="false"
-PREFER_IP_VERSION="auto"
+PREFER_IP_VERSION=""
 
 print_help() {
     cat << EOF
@@ -126,7 +126,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --prefer-ip-version)
-            PREFER_IP_VERSION="$2"
+            if [ "$2" = "4" ] || [ "$2" = "6" ]; then
+                PREFER_IP_VERSION="$2"
+            else
+                PREFER_IP_VERSION=""
+            fi
             shift 2
             ;;
         --include-nics)
@@ -320,7 +324,7 @@ echo -e "${GREEN}Komari Agent (ziqing2022/komari-agent) installed successfully!$
 echo "=================================================================="
 echo " - Repository: https://github.com/${GITHUB_REPO}"
 echo " - Installation Path: ${INSTALL_DIR}"
-echo " - Config File: ${INSTALL_DIR}/config.json (permissions: 0600)"
+echo " - Config File: ${CONFIG_DIR}/config.json (permissions: 0600)"
 echo " - Process Privacy: No sensitive credentials exposed in 'top' or 'ps'"
 echo " - MOTD Prompt: Disabled via ~/.hushlogin"
 echo "=================================================================="
