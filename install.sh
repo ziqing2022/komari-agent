@@ -269,17 +269,37 @@ chmod 600 "${CONFIG_DIR}/config.json"
 
 # Suppress MOTD login banners if enabled
 if [ "$DISABLE_MOTD" = "true" ]; then
-    log_info "Suppressing SSH login MOTD welcome messages..."
-    touch /root/.hushlogin
+    log_info "Thoroughly suppressing SSH login MOTD and dynamic welcome messages..."
+    # 1. User level hushlogin
+    touch /root/.hushlogin 2>/dev/null || true
     touch ~/.hushlogin 2>/dev/null || true
-    # If user directory exists
     for udir in /home/*; do
         if [ -d "$udir" ]; then
             touch "$udir/.hushlogin" 2>/dev/null || true
             chown --reference="$udir" "$udir/.hushlogin" 2>/dev/null || true
         fi
     done
-    log_success "MOTD suppression applied via ~/.hushlogin"
+
+    # 2. System-wide static MOTD clearing
+    > /etc/motd 2>/dev/null || true
+    > /var/run/motd 2>/dev/null || true
+    > /run/motd.dynamic 2>/dev/null || true
+
+    # 3. Disable Ubuntu / Debian dynamic update-motd scripts
+    if [ -d /etc/update-motd.d ]; then
+        chmod -x /etc/update-motd.d/* 2>/dev/null || true
+    fi
+
+    # 4. Turn off PrintMotd and PrintLastLog in sshd config if available
+    if [ -d /etc/ssh/sshd_config.d ]; then
+        echo -e "PrintMotd no\nPrintLastLog no" > /etc/ssh/sshd_config.d/99-disable-motd.conf 2>/dev/null || true
+    elif [ -f /etc/ssh/sshd_config ]; then
+        sed -i 's/^#*PrintMotd.*/PrintMotd no/' /etc/ssh/sshd_config 2>/dev/null || true
+        sed -i 's/^#*PrintLastLog.*/PrintLastLog no/' /etc/ssh/sshd_config 2>/dev/null || true
+    fi
+    systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
+
+    log_success "MOTD thoroughly suppressed (hushlogin, empty motd, disabled update-motd.d, sshd PrintMotd no)!"
 fi
 
 # Configure and install systemd service
