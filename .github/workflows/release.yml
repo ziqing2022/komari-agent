@@ -6,20 +6,56 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release tag to build and attach assets to (e.g. v1.2.10, or leave blank to attach to latest release)'
+        description: 'Release tag to build and attach assets to (e.g. v1.2.10)'
         required: false
         type: string
-        default: ''
+        default: 'v1.2.10'
 
 permissions:
   contents: write
 
 jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve_tag.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Resolve and ensure release exists
+        id: resolve_tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ github.event.release.tag_name }}" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            TAG=$(gh release view --repo ${{ github.repository }} --json tagName -q .tagName 2>/dev/null || echo "v1.2.10")
+          fi
+
+          echo "Target tag: $TAG"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          # Ensure the release exists on GitHub so asset upload succeeds
+          if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG does not exist on GitHub. Creating release now..."
+            gh release create "$TAG" \
+              --repo "${{ github.repository }}" \
+              --target "${{ github.sha }}" \
+              --title "$TAG" \
+              --notes "Release $TAG built from ${{ github.sha }}" || true
+          fi
+
   build-and-attach:
+    needs: prepare-release
     if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
         exclude:
           - goos: windows
@@ -47,30 +83,13 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Determine tag
-        id: get_tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ -n "${{ github.event.release.tag_name }}" ]; then
-            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
-          elif [ -n "${{ inputs.tag_name }}" ]; then
-            echo "tag=${{ inputs.tag_name }}" >> $GITHUB_OUTPUT
-          else
-            LATEST_TAG=$(gh release view --repo ${{ github.repository }} --json tagName -q .tagName 2>/dev/null || echo "")
-            if [ -z "$LATEST_TAG" ]; then
-              LATEST_TAG="v1.2.10"
-            fi
-            echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-          fi
-
       - name: Build binary
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.build_arch || matrix.goarch }}
           GOARM: ${{ matrix.goarm || '' }}
           CGO_ENABLED: 0
-          VERSION: ${{ steps.get_tag.outputs.tag }}
+          VERSION: ${{ needs.prepare-release.outputs.tag }}
         run: |
           BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then
@@ -92,7 +111,8 @@ jobs:
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
             true
           fi
-          TARGET_TAG="${{ steps.get_tag.outputs.tag }}"
+          TARGET_TAG="${{ needs.prepare-release.outputs.tag }}"
           echo "Uploading $BINARY_NAME to release $TARGET_TAG..."
           gh release upload "$TARGET_TAG" "$BINARY_NAME" --repo "${{ github.repository }}" --clobber
         shell: bash
+
