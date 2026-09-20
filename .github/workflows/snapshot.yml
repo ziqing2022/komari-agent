@@ -74,6 +74,10 @@ jobs:
         include:
           - goos: linux
             goarch: loong64
+          - goos: linux
+            goarch: armv5
+            build_arch: arm
+            goarm: '5'
         goos: [windows, linux, darwin, freebsd]
         goarch: [amd64, arm64, 386, arm]
 
@@ -89,7 +93,8 @@ jobs:
       - name: Build binary
         env:
           GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          GOARCH: ${{ matrix.build_arch || matrix.goarch }}
+          GOARM: ${{ matrix.goarm || '' }}
           CGO_ENABLED: 0
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
@@ -97,7 +102,7 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BINARY_NAME=${BINARY_NAME}.exe
           fi
-          go build -trimpath -ldflags="-X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
+          go build -trimpath -ldflags="-X github.com/ziqing2022/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
 
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4
@@ -203,7 +208,7 @@ jobs:
           CGO_ENABLED: 0
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          LDFLAGS="-X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}"
+          LDFLAGS="-X github.com/ziqing2022/komari-agent/update.CurrentVersion=${VERSION}"
 
           echo "Building for linux/amd64..."
           GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o komari-agent-linux-amd64

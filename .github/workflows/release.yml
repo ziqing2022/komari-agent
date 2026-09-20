@@ -24,6 +24,10 @@ jobs:
         include:
           - goos: linux
             goarch: loong64
+          - goos: linux
+            goarch: armv5
+            build_arch: arm
+            goarm: '5'
         goos: [windows, linux, darwin, freebsd]
         goarch: [amd64, arm64, 386, arm]
 
@@ -39,7 +43,8 @@ jobs:
       - name: Build binary
         env:
           GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          GOARCH: ${{ matrix.build_arch || matrix.goarch }}
+          GOARM: ${{ matrix.goarm || '' }}
           CGO_ENABLED: 0
           VERSION: ${{ github.event.release.tag_name }}
         run: |
@@ -50,7 +55,7 @@ jobs:
             # macOS binaries typically do not have a file extension
             true
           fi
-            go build -trimpath -ldflags="-X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
+          go build -trimpath -ldflags="-X github.com/ziqing2022/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
 
       - name: Upload binary to release
         env:

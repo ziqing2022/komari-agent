@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -75,7 +76,7 @@ func EstablishWebSocketConnection() {
 						go handleWebSocketMessages(conn, done)
 						break
 					} else {
-						log.Println("Failed to connect to WebSocket:", err)
+						log.Println("Failed to connect to WebSocket:", safeError(err))
 					}
 					retry++
 					time.Sleep(time.Duration(flags.ReconnectInterval) * time.Second)
@@ -85,7 +86,7 @@ func EstablishWebSocketConnection() {
 					log.Println("Max retries reached.")
 					conn, err = runPostFallback(buildWebSocketEndpoint(), interval)
 					if err != nil {
-						log.Println("POST fallback stopped:", err)
+						log.Println("POST fallback stopped:", safeError(err))
 						return
 					}
 					log.Println("WebSocket recovered from POST fallback")
@@ -463,3 +464,15 @@ func newWSDialer() *websocket.Dialer {
 	}
 	return d
 }
+
+// safeError 脱敏错误信息中可能包含的 token，避免敏感信息直接暴露在日志中
+func safeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if flags.Token != "" && strings.Contains(err.Error(), flags.Token) {
+		return errors.New(strings.ReplaceAll(err.Error(), flags.Token, "***"))
+	}
+	return err
+}
+

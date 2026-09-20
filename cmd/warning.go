@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/komari-monitor/komari-agent/utils"
+	"github.com/ziqing2022/komari-agent/utils"
 )
 
 const (

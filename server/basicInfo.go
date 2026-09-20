@@ -60,6 +60,15 @@ func uploadBasicInfo() error {
 		"version":            update.CurrentVersion,
 	}
 
+	containerInfo := monitoring.GetContainerInfo()
+	if containerInfo.IsContainer {
+		data["is_container"] = true
+		data["container_runtime"] = containerInfo.Runtime
+		if containerInfo.ContainerID != "" {
+			data["container_id"] = containerInfo.ContainerID
+		}
+	}
+
 	return tryUploadData(data)
 }
 

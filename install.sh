@@ -148,7 +148,8 @@ log_config "  Service name: ${GREEN}$service_name${NC}"
 log_config "  Service user: ${GREEN}$service_user${NC}"
 log_config "  Install directory: ${GREEN}$target_dir${NC}"
 log_config "  GitHub proxy: ${GREEN}${github_proxy:-(direct)}${NC}"
-log_config "  Binary arguments: ${GREEN}$komari_args${NC}"
+masked_args=$(echo "$komari_args" | sed -E 's/(-t|--token)([= ])[^ ]+/\1\2***/g')
+log_config "  Binary arguments: ${GREEN}$masked_args${NC}"
 if [ -n "$install_version" ]; then
     log_config "  Specified agent version: ${GREEN}$install_version${NC}"
 else
@@ -300,6 +301,18 @@ case $arch in
                 ;;
         esac
         ;;
+    armv5*)
+        # ARMv5 support
+        case $os_name in
+            linux)
+                arch="armv5"
+                ;;
+            *)
+                log_error "ARMv5 architecture not supported on $os_name"
+                exit 1
+                ;;
+        esac
+        ;;
     armv7*|armv6*)
         # ARM 32-bit support
         case $os_name in
@@ -322,7 +335,7 @@ log_info "Detected OS: ${GREEN}$os_name${NC}, Architecture: ${GREEN}$arch${NC}"
 file_name="komari-agent-${os_name}-${arch}"
 
 resolve_snapshot_version() {
-    snapshot_api_url="https://api.github.com/repos/komari-monitor/komari-agent/releases?per_page=100"
+    snapshot_api_url="https://api.github.com/repos/ziqing2022/komari-agent/releases?per_page=100"
     if [ -n "$github_proxy" ]; then
         snapshot_api_urls="${github_proxy}/${snapshot_api_url} ${snapshot_api_url}"
     else
@@ -383,10 +396,10 @@ fi
 
 if [ -n "$github_proxy" ]; then
     # Use proxy for GitHub releases
-    download_url="${github_proxy}/https://github.com/komari-monitor/komari-agent/releases/${download_path}/${file_name}"
+    download_url="${github_proxy}/https://github.com/ziqing2022/komari-agent/releases/${download_path}/${file_name}"
 else
     # Direct access to GitHub releases
-    download_url="https://github.com/komari-monitor/komari-agent/releases/${download_path}/${file_name}"
+    download_url="https://github.com/ziqing2022/komari-agent/releases/${download_path}/${file_name}"
 fi
 
 log_step "Creating installation directory: ${GREEN}$target_dir${NC}"
@@ -431,6 +444,66 @@ if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
     chown "$service_user" "$komari_agent_path"
 fi
 log_success "Komari-agent installed to ${GREEN}$komari_agent_path${NC}"
+
+# 生成/提取配置到 config.json，避免敏感 host 和 token 暴露在 top/ps 进程列表和日志中
+create_or_update_config() {
+    local cfg_file="${target_dir}/config.json"
+    local endpoint=""
+    local token=""
+    local remaining_args=""
+
+    # 提取 endpoint 和 token
+    set -- $komari_args
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -e|--endpoint)
+                endpoint="$2"
+                shift 2
+                ;;
+            -t|--token)
+                token="$2"
+                shift 2
+                ;;
+            --endpoint=*)
+                endpoint="${1#*=}"
+                shift
+                ;;
+            --token=*)
+                token="${1#*=}"
+                shift
+                ;;
+            *)
+                remaining_args="$remaining_args $1"
+                shift
+                ;;
+        esac
+    done
+    remaining_args="${remaining_args# }"
+
+    # 如果有传入 endpoint 或 token，写入/更新配置文件
+    if [ -n "$endpoint" ] || [ -n "$token" ] || [ ! -f "$cfg_file" ]; then
+        cat > "$cfg_file" << EOF
+{
+  "endpoint": "${endpoint}",
+  "token": "${token}"
+}
+EOF
+        chmod 600 "$cfg_file" 2>/dev/null || true
+        if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
+            chown "$service_user" "$cfg_file" 2>/dev/null || true
+        fi
+        log_info "Created secured config file: ${GREEN}${cfg_file}${NC} (mode 600, token protected from top/ps)"
+    fi
+
+    # 重建命令行参数：使用 --config 替代命令行直接传参
+    if [ -n "$remaining_args" ]; then
+        komari_args="--config ${cfg_file} ${remaining_args}"
+    else
+        komari_args="--config ${cfg_file}"
+    fi
+}
+
+create_or_update_config
 
 # Detect init system and configure service
 log_step "Configuring system service..."

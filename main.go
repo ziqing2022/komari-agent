@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/komari-monitor/komari-agent/cmd"
+	"github.com/ziqing2022/komari-agent/cmd"
 )
 
 func main() {

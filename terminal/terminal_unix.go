@@ -66,7 +66,7 @@ func newTerminalImpl() (*terminalImpl, error) {
 		return nil, fmt.Errorf("no supported shell found among %v", defaultShells)
 	}
 
-	cmd := buildMotdShellCommand(shell)
+	cmd := exec.Command(shell)
 	cmd.Env = append(os.Environ(), // 继承系统环境变量
 		"TERM=xterm-256color", // 设置终端类型，提高兼容性
 		"LANG=C.UTF-8",        // 设置语言环境为 UTF-8
@@ -75,17 +75,7 @@ func newTerminalImpl() (*terminalImpl, error) {
 
 	tty, err := pty.Start(cmd)
 	if err != nil {
-		// 回退到原始启动逻辑（直接启动 shell，再无参数）
-		cmd = exec.Command(shell)
-		cmd.Env = append(os.Environ(),
-			"TERM=xterm-256color",
-			"LANG=C.UTF-8",
-			"LC_ALL=C.UTF-8",
-		)
-		tty, err = pty.Start(cmd)
-		if err != nil {
-			return nil, fmt.Errorf("failed to start pty with argv0 prelude and plain shell: %v", err)
-		}
+		return nil, fmt.Errorf("failed to start pty with shell: %v", err)
 	}
 
 	// 设置初始终端大小
@@ -98,12 +88,6 @@ func newTerminalImpl() (*terminalImpl, error) {
 			cmd: cmd,
 		},
 	}, nil
-}
-
-const motdShellPrelude = "for f in /etc/update-motd.d/*; do [ -e \"$f\" ] && [ -x \"$f\" ] && \"$f\"; done; [ -r /etc/motd ] && cat /etc/motd; exec \"$1\""
-
-func buildMotdShellCommand(shell string) *exec.Cmd {
-	return exec.Command("/bin/sh", "-c", motdShellPrelude, "komari-motd", shell)
 }
 
 // unixTerminal 实现了 Unix 系统下的终端接口。

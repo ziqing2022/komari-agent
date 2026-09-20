@@ -1,0 +1,6 @@
+{
+  "name": "Komari Agent",
+  "description": "Server monitoring agent and management dashboard for tracking system telemetry, resource utilization, and JSON-RPC v2 communication.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -10,19 +10,20 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
 
-	"github.com/komari-monitor/komari-agent/dnsresolver"
-	"github.com/komari-monitor/komari-agent/monitoring/netstatic"
-	monitoring "github.com/komari-monitor/komari-agent/monitoring/unit"
-	"github.com/komari-monitor/komari-agent/server"
-	"github.com/komari-monitor/komari-agent/update"
+	"github.com/ziqing2022/komari-agent/dnsresolver"
+	"github.com/ziqing2022/komari-agent/monitoring/netstatic"
+	monitoring "github.com/ziqing2022/komari-agent/monitoring/unit"
+	"github.com/ziqing2022/komari-agent/server"
+	"github.com/ziqing2022/komari-agent/update"
 	"github.com/spf13/cobra"
 
-	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
+	pkg_flags "github.com/ziqing2022/komari-agent/cmd/flags"
 )
 
 var flags = pkg_flags.GlobalConfig
@@ -40,6 +41,21 @@ var RootCmd = &cobra.Command{
 			return nil
 		}
 		loadFromEnv() // 从环境变量加载配置，覆盖解析
+		if flags.ConfigFile == "" {
+			// 自动探测当前工作目录、可执行文件所在目录以及标准系统目录中的 config.json
+			if _, err := os.Stat("config.json"); err == nil {
+				flags.ConfigFile = "config.json"
+			} else if exePath, err := os.Executable(); err == nil {
+				exeConfig := filepath.Join(filepath.Dir(exePath), "config.json")
+				if _, err := os.Stat(exeConfig); err == nil {
+					flags.ConfigFile = exeConfig
+				}
+			} else if _, err := os.Stat("/etc/komari/config.json"); err == nil {
+				flags.ConfigFile = "/etc/komari/config.json"
+			} else if _, err := os.Stat("/opt/komari/config.json"); err == nil {
+				flags.ConfigFile = "/opt/komari/config.json"
+			}
+		}
 		if flags.ConfigFile != "" {
 			bytes, err := os.ReadFile(flags.ConfigFile)
 			if err != nil {
