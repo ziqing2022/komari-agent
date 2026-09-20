@@ -1,3 +1,4 @@
+// Package terminal handles agent terminal operations.
 package terminal
 
 import (
@@ -8,7 +9,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
+	pkg_flags "github.com/ziqing2022/komari-agent/cmd/flags"
 )
 
 var flags = pkg_flags.GlobalConfig

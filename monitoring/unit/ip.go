@@ -1,3 +1,4 @@
+// Package monitoring handles system IP metrics.
 package monitoring
 
 import (
@@ -9,7 +10,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/komari-monitor/komari-agent/dnsresolver"
+	"github.com/ziqing2022/komari-agent/dnsresolver"
 )
 
 var (

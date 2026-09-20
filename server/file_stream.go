@@ -1,3 +1,4 @@
+// Package server file stream operations.
 package server
 
 import (
@@ -14,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
-	"github.com/komari-monitor/komari-agent/dnsresolver"
+	pkg_flags "github.com/ziqing2022/komari-agent/cmd/flags"
+	"github.com/ziqing2022/komari-agent/dnsresolver"
 )
 
 const (

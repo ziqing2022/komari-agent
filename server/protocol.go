@@ -1,10 +1,11 @@
+// Package server protocol types.
 package server
 
 import (
 	"encoding/json"
 	"fmt"
 
-	v2 "github.com/komari-monitor/komari-agent/protocol/v2"
+	v2 "github.com/ziqing2022/komari-agent/protocol/v2"
 )
 
 type httpStatusError struct {

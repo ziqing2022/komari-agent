@@ -1,3 +1,4 @@
+// Package monitoring handles system memory metrics.
 package monitoring
 
 import (
@@ -9,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
+	pkg_flags "github.com/ziqing2022/komari-agent/cmd/flags"
 	"github.com/shirou/gopsutil/v4/mem"
 )
 

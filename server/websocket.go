@@ -1,3 +1,4 @@
+// Package server handles agent WebSocket connections.
 package server
 
 import (
@@ -16,12 +17,12 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/komari-monitor/komari-agent/dnsresolver"
-	"github.com/komari-monitor/komari-agent/monitoring"
-	v2 "github.com/komari-monitor/komari-agent/protocol/v2"
-	"github.com/komari-monitor/komari-agent/terminal"
-	"github.com/komari-monitor/komari-agent/utils"
-	"github.com/komari-monitor/komari-agent/ws"
+	"github.com/ziqing2022/komari-agent/dnsresolver"
+	"github.com/ziqing2022/komari-agent/monitoring"
+	v2 "github.com/ziqing2022/komari-agent/protocol/v2"
+	"github.com/ziqing2022/komari-agent/terminal"
+	"github.com/ziqing2022/komari-agent/utils"
+	"github.com/ziqing2022/komari-agent/ws"
 )
 
 var (

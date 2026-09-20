@@ -1,3 +1,4 @@
+// Package server handles asynchronous task execution.
 package server
 
 import (
@@ -16,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/komari-monitor/komari-agent/dnsresolver"
-	v2 "github.com/komari-monitor/komari-agent/protocol/v2"
-	"github.com/komari-monitor/komari-agent/ws"
+	"github.com/ziqing2022/komari-agent/dnsresolver"
+	v2 "github.com/ziqing2022/komari-agent/protocol/v2"
+	"github.com/ziqing2022/komari-agent/ws"
 	ping "github.com/prometheus-community/pro-bing"
 )
 

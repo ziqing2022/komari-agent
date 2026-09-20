@@ -1,3 +1,4 @@
+// Package monitoring handles system network metrics.
 package monitoring
 
 import (
@@ -10,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/komari-monitor/komari-agent/monitoring/netstatic"
-	"github.com/komari-monitor/komari-agent/utils"
+	"github.com/ziqing2022/komari-agent/monitoring/netstatic"
+	"github.com/ziqing2022/komari-agent/utils"
 	"github.com/shirou/gopsutil/v4/net"
 )
 

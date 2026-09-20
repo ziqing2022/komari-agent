@@ -1,3 +1,4 @@
+// Package server tests for file streaming operations.
 package server
 
 import (
@@ -12,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
+	pkg_flags "github.com/ziqing2022/komari-agent/cmd/flags"
 )
 
 func preserveAgentConfig(t *testing.T, endpoint string) {

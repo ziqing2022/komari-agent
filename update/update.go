@@ -1,3 +1,4 @@
+// Package update handles self-updating capabilities.
 package update
 
 import (
@@ -15,7 +16,7 @@ import (
 	"time"
 
 	"github.com/blang/semver"
-	"github.com/komari-monitor/komari-agent/dnsresolver"
+	"github.com/ziqing2022/komari-agent/dnsresolver"
 	"github.com/rhysd/go-github-selfupdate/selfupdate"
 )
 

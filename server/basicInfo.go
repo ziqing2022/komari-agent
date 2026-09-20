@@ -1,3 +1,4 @@
+// Package server handles communication and basic node information.
 package server
 
 import (
@@ -8,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/komari-monitor/komari-agent/dnsresolver"
-	monitoring "github.com/komari-monitor/komari-agent/monitoring/unit"
-	"github.com/komari-monitor/komari-agent/protocol/transport"
-	v2 "github.com/komari-monitor/komari-agent/protocol/v2"
-	"github.com/komari-monitor/komari-agent/update"
+	"github.com/ziqing2022/komari-agent/dnsresolver"
+	monitoring "github.com/ziqing2022/komari-agent/monitoring/unit"
+	"github.com/ziqing2022/komari-agent/protocol/transport"
+	v2 "github.com/ziqing2022/komari-agent/protocol/v2"
+	"github.com/ziqing2022/komari-agent/update"
 
-	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
+	pkg_flags "github.com/ziqing2022/komari-agent/cmd/flags"
 )
 
 var flags = pkg_flags.GlobalConfig
