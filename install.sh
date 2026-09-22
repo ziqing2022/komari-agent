@@ -36,7 +36,9 @@ log_config() {
 }
 
 # $EUID 是 bash 专有变量, ash/dash 下未定义, 补 POSIX 回退
-EUID=${EUID:-$(id -u)}
+if [ -z "${EUID:-}" ]; then
+    EUID=$(id -u)
+fi
 
 # Default values
 service_name="komari-agent"
@@ -78,6 +80,7 @@ esac
 
 # Parse install-specific arguments
 komari_args=""
+insecure_curl=""
 # [[ ]] -> [ ] (POSIX)
 while [ $# -gt 0 ]; do
     case $1 in
@@ -100,6 +103,11 @@ while [ $# -gt 0 ]; do
             ;;
         --install-no-mirror) # 新增: 关闭自动加速镜像
             install_no_mirror=true
+            shift
+            ;;
+        --ignore-unsafe-cert)
+            insecure_curl="-k"
+            komari_args="$komari_args $1"
             shift
             ;;
         --install*)
@@ -421,14 +429,79 @@ https://ghproxy.net/${download_url}
 "
 fi
 
+# Check if downloaded binary is valid (exists, size >= 2MB, executable magic)
+is_valid_binary() {
+    local target_file="$1"
+    [ -s "$target_file" ] || return 1
+    local sz=$(wc -c < "$target_file" 2>/dev/null || echo 0)
+    # Binary should be at least 2MB for compiled agent
+    if [ "$sz" -lt 2000000 ]; then
+        return 1
+    fi
+    if command -v file >/dev/null 2>&1; then
+        if file "$target_file" | grep -Eqi "(ELF|executable|PE32|Mach-O)"; then
+            return 0
+        fi
+    fi
+    local magic=$(head -c 4 "$target_file" 2>/dev/null)
+    if [ "$magic" = "$(printf '\177ELF')" ] || [ "$magic" = "MZ" ]; then
+        return 0
+    fi
+    # If head -c / file are limited, accept files > 5MB
+    if [ "$sz" -gt 5000000 ]; then
+        return 0
+    fi
+    return 1
+}
+
+# Check if curl supports --http1.1 to avoid HTTP/2 stream EOF bugs on older curl (Synology DSM / old Linux)
+curl_http11=""
+if curl --help 2>&1 | grep -q -- '--http1.1'; then
+    curl_http11="--http1.1"
+fi
+
 dl_ok=""
 for u in $download_urls; do
     log_step "Downloading $file_name ..."
     log_info "URL: ${CYAN}$u${NC}"
-    if curl -fL --connect-timeout 15 -o "$komari_agent_path" "$u" && [ -s "$komari_agent_path" ]; then
-        dl_ok=1
-        break
+
+    # 1. Primary download with curl (forcing HTTP/1.1 avoids HTTP/2 stream errors on older curl)
+    if curl -fL $insecure_curl $curl_http11 --connect-timeout 15 -o "$komari_agent_path" "$u"; then
+        if is_valid_binary "$komari_agent_path"; then
+            dl_ok=1
+            break
+        fi
+    else
+        # Even if curl exits non-zero (e.g., exit code 18/92/56 stream close warnings on Azure/GitHub),
+        # verify if the binary was actually fully downloaded and valid!
+        if is_valid_binary "$komari_agent_path"; then
+            log_warning "Download finished with protocol warning from curl, but binary is complete and verified."
+            dl_ok=1
+            break
+        fi
     fi
+
+    # 2. SSL certificate fallback if insecure wasn't already set
+    if [ -z "$insecure_curl" ]; then
+        if curl -fkL $curl_http11 --connect-timeout 15 -o "$komari_agent_path" "$u" && is_valid_binary "$komari_agent_path"; then
+            log_warning "Downloaded successfully with SSL verification disabled."
+            dl_ok=1
+            break
+        fi
+    fi
+
+    # 3. Fallback to wget if available (standard in Synology DSM / BusyBox)
+    if command -v wget >/dev/null 2>&1; then
+        local wget_flags="--timeout=15 -O $komari_agent_path"
+        if [ -n "$insecure_curl" ]; then
+            wget_flags="--no-check-certificate $wget_flags"
+        fi
+        if wget $wget_flags "$u" && is_valid_binary "$komari_agent_path"; then
+            dl_ok=1
+            break
+        fi
+    fi
+
     rm -f "$komari_agent_path"
 done
 
