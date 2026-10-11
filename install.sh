@@ -81,9 +81,14 @@ esac
 # Parse install-specific arguments
 komari_args=""
 insecure_curl=""
+do_uninstall=false
 # [[ ]] -> [ ] (POSIX)
 while [ $# -gt 0 ]; do
     case $1 in
+        --uninstall)
+            do_uninstall=true
+            shift
+            ;;
         --install-dir)
             target_dir="$2"
             install_dir_specified=true
@@ -147,24 +152,6 @@ if [ "$EUID" -ne 0 ] && [ "$os_name" = "linux" ]; then
     fi
 fi
 
-echo -e "${WHITE}===========================================${NC}"
-echo -e "${WHITE}    Komari Agent Installation Script     ${NC}"
-echo -e "${WHITE}===========================================${NC}"
-echo ""
-log_config "Installation configuration:"
-log_config "  Service name: ${GREEN}$service_name${NC}"
-log_config "  Service user: ${GREEN}$service_user${NC}"
-log_config "  Install directory: ${GREEN}$target_dir${NC}"
-log_config "  GitHub proxy: ${GREEN}${github_proxy:-(direct)}${NC}"
-masked_args=$(echo "$komari_args" | sed -E 's/(-t|--token)([= ])[^ ]+/\1\2***/g')
-log_config "  Binary arguments: ${GREEN}$masked_args${NC}"
-if [ -n "$install_version" ]; then
-    log_config "  Specified agent version: ${GREEN}$install_version${NC}"
-else
-    log_config "  Agent version: ${GREEN}Latest${NC}"
-fi
-echo ""
-
 # Function to uninstall the previous installation
 uninstall_previous() {
     log_step "Checking for previous installation..."
@@ -222,6 +209,59 @@ uninstall_previous() {
         rm -f "$komari_agent_path"
     fi
 }
+
+# Dedicated uninstall mode
+if [ "$do_uninstall" = true ]; then
+    echo -e "${WHITE}===========================================${NC}"
+    echo -e "${WHITE}    Komari Agent Uninstallation          ${NC}"
+    echo -e "${WHITE}===========================================${NC}"
+    echo ""
+    log_config "Uninstallation configuration:"
+    log_config "  Service name: ${GREEN}$service_name${NC}"
+    log_config "  Install directory: ${GREEN}$target_dir${NC}"
+    echo ""
+
+    uninstall_previous
+
+    log_step "Stopping any running agent processes..."
+    pkill -x agent 2>/dev/null || killall agent 2>/dev/null || true
+
+    log_step "Cleaning up configuration and leftover files..."
+    rm -f "$komari_agent_path"
+    rm -f "${target_dir}/config.json"
+    rm -f "${target_dir}/agent.log"
+
+    case "$target_dir" in
+        */komari|*/komari/)
+            log_info "Removing installation directory: $target_dir"
+            rm -rf "$target_dir"
+            ;;
+        *)
+            rmdir "$target_dir" 2>/dev/null || true
+            ;;
+    esac
+
+    log_success "Komari Agent uninstalled cleanly and completely!"
+    exit 0
+fi
+
+echo -e "${WHITE}===========================================${NC}"
+echo -e "${WHITE}    Komari Agent Installation Script     ${NC}"
+echo -e "${WHITE}===========================================${NC}"
+echo ""
+log_config "Installation configuration:"
+log_config "  Service name: ${GREEN}$service_name${NC}"
+log_config "  Service user: ${GREEN}$service_user${NC}"
+log_config "  Install directory: ${GREEN}$target_dir${NC}"
+log_config "  GitHub proxy: ${GREEN}${github_proxy:-(direct)}${NC}"
+masked_args=$(echo "$komari_args" | sed -E 's/(-t|--token)([= ])[^ ]+/\1\2***/g')
+log_config "  Binary arguments: ${GREEN}$masked_args${NC}"
+if [ -n "$install_version" ]; then
+    log_config "  Specified agent version: ${GREEN}$install_version${NC}"
+else
+    log_config "  Agent version: ${GREEN}Latest${NC}"
+fi
+echo ""
 
 # Uninstall previous installation
 uninstall_previous
@@ -411,9 +451,28 @@ else
 fi
 
 log_step "Creating installation directory: ${GREEN}$target_dir${NC}"
-mkdir -p "$target_dir"
+if ! mkdir -p "$target_dir" 2>/dev/null; then
+    # Fallback if default /opt/komari cannot be created (e.g. Synology DSM broken /opt symlink)
+    if [ "$install_dir_specified" = false ]; then
+        for alt_dir in "/usr/local/komari" "/usr/bin" "$HOME/.komari"; do
+            if mkdir -p "$alt_dir" 2>/dev/null || [ -d "$alt_dir" ]; then
+                target_dir="$alt_dir"
+                komari_agent_path="${target_dir}/agent"
+                log_warning "Cannot create /opt/komari, falling back to: ${GREEN}$target_dir${NC}"
+                break
+            fi
+        done
+    fi
+fi
+
+if [ ! -d "$target_dir" ]; then
+    log_error "Failed to create installation directory: $target_dir"
+    log_error "Please specify a writable directory via --install-dir (e.g. --install-dir /usr/bin)"
+    exit 1
+fi
+
 if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
-    chown "$service_user" "$target_dir"
+    chown "$service_user" "$target_dir" 2>/dev/null || true
 fi
 
 # Download with automatic mirror fallback.
@@ -433,13 +492,24 @@ fi
 is_valid_binary() {
     local target_file="$1"
     [ -s "$target_file" ] || return 1
-    local sz=$(wc -c < "$target_file" 2>/dev/null || echo 0)
+
+    # Multiple fallbacks to get file size (stat, wc, ls) across BusyBox / Synology DSM / BSD
+    local sz=""
+    if command -v stat >/dev/null 2>&1; then
+        sz=$(stat -c %s "$target_file" 2>/dev/null || stat -f %z "$target_file" 2>/dev/null || echo "")
+    fi
+    if [ -z "$sz" ]; then
+        sz=$(wc -c < "$target_file" 2>/dev/null || ls -l "$target_file" 2>/dev/null | awk '{print $5}' || echo 0)
+    fi
+    sz=$(echo "$sz" | tr -dc '0-9')
+    sz=${sz:-0}
+
     # Binary should be at least 2MB for compiled agent
     if [ "$sz" -lt 2000000 ]; then
         return 1
     fi
     if command -v file >/dev/null 2>&1; then
-        if file "$target_file" | grep -Eqi "(ELF|executable|PE32|Mach-O)"; then
+        if file "$target_file" 2>/dev/null | grep -Eqi "(ELF|executable|PE32|Mach-O)"; then
             return 0
         fi
     fi
@@ -447,8 +517,8 @@ is_valid_binary() {
     if [ "$magic" = "$(printf '\177ELF')" ] || [ "$magic" = "MZ" ]; then
         return 0
     fi
-    # If head -c / file are limited, accept files > 5MB
-    if [ "$sz" -gt 5000000 ]; then
+    # If head -c / file are limited on BusyBox/embedded Linux, accept any file >= 2MB
+    if [ "$sz" -ge 2000000 ]; then
         return 0
     fi
     return 1
@@ -492,7 +562,7 @@ for u in $download_urls; do
 
     # 3. Fallback to wget if available (standard in Synology DSM / BusyBox)
     if command -v wget >/dev/null 2>&1; then
-        local wget_flags="--timeout=15 -O $komari_agent_path"
+        wget_flags="--timeout=15 -O $komari_agent_path"
         if [ -n "$insecure_curl" ]; then
             wget_flags="--no-check-certificate $wget_flags"
         fi
