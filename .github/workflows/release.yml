@@ -1,6 +1,9 @@
 name: Release Binaries
 
 on:
+  push:
+    tags:
+      - 'v*'
   release:
     types: [published]
   workflow_dispatch:
@@ -30,6 +33,8 @@ jobs:
         run: |
           if [ -n "${{ github.event.release.tag_name }}" ]; then
             TAG="${{ github.event.release.tag_name }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
           elif [ -n "${{ inputs.tag_name }}" ]; then
             TAG="${{ inputs.tag_name }}"
           else
@@ -51,7 +56,7 @@ jobs:
 
   build-and-attach:
     needs: prepare-release
-    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || !github.event.release.prerelease }}
     runs-on: ubuntu-latest
 
     strategy:
