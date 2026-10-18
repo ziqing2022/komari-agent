@@ -21,6 +21,7 @@ import (
 	"github.com/ziqing2022/komari-agent/monitoring"
 	v2 "github.com/ziqing2022/komari-agent/protocol/v2"
 	"github.com/ziqing2022/komari-agent/terminal"
+	"github.com/ziqing2022/komari-agent/tunnel"
 	"github.com/ziqing2022/komari-agent/utils"
 	"github.com/ziqing2022/komari-agent/ws"
 )
@@ -415,6 +416,21 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			return true
 		} else {
 			log.Printf("bad v2 file params: %v", err)
+		}
+	case v2.MethodAgentTunnel:
+		var p v2.TunnelConfigParams
+		if err := v2.BindParams(params, &p); err == nil {
+			go func() {
+				active, err := tunnel.ApplyTunnelRules(p.Rules)
+				if err != nil {
+					log.Printf("[Tunnel] Failed to apply tunnel rules: %v", err)
+				} else {
+					log.Printf("[Tunnel] Applied %d rules successfully (%d active)", len(p.Rules), active)
+				}
+			}()
+			return true
+		} else {
+			log.Printf("bad v2 tunnel params: %v", err)
 		}
 	default:
 		log.Printf("unknown v2 event method %s", method)

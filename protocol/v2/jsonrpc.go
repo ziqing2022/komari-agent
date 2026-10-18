@@ -19,7 +19,42 @@ const (
 	MethodAgentPull       = "agent.pull"
 	MethodAgentFile       = "agent.file"
 	MethodAgentFileResult = "agent.file.result"
+	MethodAgentTunnel       = "agent.tunnel"
+	MethodAgentTunnelResult = "agent.tunnel.result"
 )
+
+type TunnelRule struct {
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	RuleType         string `json:"rule_type"` // "forward", "vless", "socks5", "shadowsocks", "trojan", "hysteria2"
+	ListenPort       int    `json:"listen_port"`
+	Protocol         string `json:"protocol"` // "tcp", "udp", "both"
+	TargetType       string `json:"target_type"` // "local", "custom"
+	TargetHost       string `json:"target_host"`
+	TargetPort       int    `json:"target_port"`
+	AutoOpenFirewall bool   `json:"auto_open_firewall"`
+	Enabled          bool   `json:"enabled"`
+
+	// 高级协议专用字段 (VLESS / SOCKS5 / Shadowsocks / Trojan / Hysteria2)
+	UUID       string `json:"uuid,omitempty"`
+	Password   string `json:"password,omitempty"`
+	Username   string `json:"username,omitempty"`
+	Method     string `json:"method,omitempty"`
+	SNI        string `json:"sni,omitempty"`
+	PrivateKey string `json:"private_key,omitempty"`
+	PublicKey  string `json:"public_key,omitempty"`
+	ShortID    string `json:"short_id,omitempty"`
+}
+
+type TunnelConfigParams struct {
+	Rules []TunnelRule `json:"rules"`
+}
+
+type TunnelResultParams struct {
+	Status  string `json:"status"` // "success", "error"
+	Message string `json:"message"`
+	Active  int    `json:"active"`
+}
 
 type Request struct {
 	JSONRPC string      `json:"jsonrpc"`
