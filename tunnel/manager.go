@@ -272,7 +272,7 @@ func generateSingBoxConfig(rules []v2.TunnelRule) *SingBoxConfig {
 				"tag":           tag,
 				"listen":        "::",
 				"listen_port":   r.ListenPort,
-				"override_host": targetHost,
+				"override_address": targetHost,
 				"override_port": targetPort,
 			}
 
