@@ -44,6 +44,15 @@ type TunnelRule struct {
 	PrivateKey string `json:"private_key,omitempty"`
 	PublicKey  string `json:"public_key,omitempty"`
 	ShortID    string `json:"short_id,omitempty"`
+
+	// 跨节点反向穿透专用字段
+	IsReverse        bool   `json:"is_reverse,omitempty"`
+	BridgeClientUUID string `json:"bridge_client_uuid,omitempty"`
+	BridgeHost       string `json:"bridge_host,omitempty"`
+	BridgePort       int    `json:"bridge_port,omitempty"`
+	ControlPort      int    `json:"control_port,omitempty"`
+	TunnelSecret     string `json:"tunnel_secret,omitempty"`
+	Role             string `json:"role,omitempty"` // "target" (内网端) 或 "bridge" (公网端)
 }
 
 type TunnelConfigParams struct {

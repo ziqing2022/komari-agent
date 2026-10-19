@@ -48,11 +48,22 @@ func ApplyTunnelRules(rules []v2.TunnelRule) (int, error) {
 	syncFirewallPorts(appliedRules, rules)
 	appliedRules = rules
 
-	// 如果没有开启的规则，停止 sing-box 进程
-	if activeCount == 0 {
+	// 2. 同步运行/更新原生反向穿透引擎 (Bridge 公网端 或 Target 内网端)
+	SyncReverseTunnels(rules)
+
+	// 3. 计算常规 Sing-box 规则 (排除由原生 reverse 引擎托管的规则)
+	regularActiveCount := 0
+	for _, r := range rules {
+		if r.Enabled && !r.IsReverse {
+			regularActiveCount++
+		}
+	}
+
+	// 如果没有开启的常规规则，停止 sing-box 进程
+	if regularActiveCount == 0 {
 		stopProcess()
-		log.Println("[Tunnel] No active rules, sing-box stopped.")
-		return 0, nil
+		log.Println("[Tunnel] No active regular sing-box rules, sing-box stopped.")
+		return activeCount, nil
 	}
 
 	// 2. 确保 Sing-box 核心就绪 (全平台架构适配)
@@ -128,7 +139,7 @@ func generateSingBoxConfig(rules []v2.TunnelRule) *SingBoxConfig {
 	}
 
 	for i, r := range rules {
-		if !r.Enabled || r.ListenPort <= 0 {
+		if !r.Enabled || r.ListenPort <= 0 || r.IsReverse {
 			continue
 		}
 
@@ -308,14 +319,26 @@ func syncFirewallPorts(oldRules, newRules []v2.TunnelRule) {
 	oldMap := make(map[int]v2.TunnelRule)
 	for _, r := range oldRules {
 		if r.Enabled && r.AutoOpenFirewall {
+			if r.IsReverse && strings.ToLower(r.Role) == "target" {
+				continue // 内网端无需入站端口
+			}
 			oldMap[r.ListenPort] = r
+			if r.IsReverse && strings.ToLower(r.Role) == "bridge" && r.ControlPort > 0 {
+				oldMap[r.ControlPort] = r
+			}
 		}
 	}
 
 	newMap := make(map[int]v2.TunnelRule)
 	for _, r := range newRules {
 		if r.Enabled && r.AutoOpenFirewall {
+			if r.IsReverse && strings.ToLower(r.Role) == "target" {
+				continue // 内网端无需入站端口
+			}
 			newMap[r.ListenPort] = r
+			if r.IsReverse && strings.ToLower(r.Role) == "bridge" && r.ControlPort > 0 {
+				newMap[r.ControlPort] = r
+			}
 		}
 	}
 
