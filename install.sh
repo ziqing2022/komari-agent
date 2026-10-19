@@ -41,7 +41,7 @@ if [ -z "${EUID:-}" ]; then
 fi
 
 # Default values
-service_name="komari-agent"
+service_name="sser"
 target_dir="/opt/komari"
 github_proxy=""
 install_version="" # New parameter for specifying version
@@ -139,7 +139,7 @@ if [ "$EUID" -ne 0 ] && [ "$install_dir_specified" = false ]; then
     esac
 fi
 
-komari_agent_path="${target_dir}/agent"
+komari_agent_path="${target_dir}/sser"
 
 # User services are the only service type a non-root Linux installation can manage.
 if [ "$EUID" -ne 0 ] && [ "$os_name" = "linux" ]; then
@@ -156,58 +156,42 @@ fi
 uninstall_previous() {
     log_step "Checking for previous installation..."
     
-    # Stop and disable service if it exists
-    if [ "$user_service" = true ]; then
-        if systemctl --user list-unit-files | grep -q "${service_name}.service"; then
-            log_info "Stopping and disabling existing systemd user service..."
-            systemctl --user stop "${service_name}.service" || true
-            systemctl --user disable "${service_name}.service" || true
-            rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${service_name}.service"
-            systemctl --user daemon-reload
+    # Stop and disable service if it exists (check both sser and legacy komari-agent)
+    for svc in "$service_name" "komari-agent"; do
+        if [ "$user_service" = true ]; then
+            if systemctl --user list-unit-files 2>/dev/null | grep -q "${svc}.service"; then
+                log_info "Stopping and disabling existing systemd user service ($svc)..."
+                systemctl --user stop "${svc}.service" || true
+                systemctl --user disable "${svc}.service" || true
+                rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${svc}.service"
+                systemctl --user daemon-reload
+            fi
+        elif command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q "${svc}.service"; then
+            log_info "Stopping and disabling existing systemd service ($svc)..."
+            systemctl stop ${svc}.service 2>/dev/null || true
+            systemctl disable ${svc}.service 2>/dev/null || true
+            rm -f "/etc/systemd/system/${svc}.service"
+            systemctl daemon-reload 2>/dev/null || true
+        elif command -v rc-service >/dev/null 2>&1 && [ -f "/etc/init.d/${svc}" ]; then
+            log_info "Stopping and disabling existing OpenRC service ($svc)..."
+            rc-service ${svc} stop 2>/dev/null || true
+            rc-update del ${svc} default 2>/dev/null || true
+            rm -f "/etc/init.d/${svc}"
+        elif command -v uci >/dev/null 2>&1 && [ -f "/etc/init.d/${svc}" ]; then
+            log_info "Stopping and disabling existing procd service ($svc)..."
+            /etc/init.d/${svc} stop 2>/dev/null || true
+            /etc/init.d/${svc} disable 2>/dev/null || true
+            rm -f "/etc/init.d/${svc}"
+        elif command -v initctl >/dev/null 2>&1 && [ -f "/etc/init/${svc}.conf" ]; then
+            log_info "Stopping and removing existing upstart service ($svc)..."
+            initctl stop ${svc} 2>/dev/null || true
+            rm -f "/etc/init/${svc}.conf"
         fi
-    elif command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q "${service_name}.service"; then
-        log_info "Stopping and disabling existing systemd service..."
-        systemctl stop ${service_name}.service
-        systemctl disable ${service_name}.service
-        rm -f "/etc/systemd/system/${service_name}.service"
-        systemctl daemon-reload
-    elif command -v rc-service >/dev/null 2>&1 && [ -f "/etc/init.d/${service_name}" ]; then
-        log_info "Stopping and disabling existing OpenRC service..."
-        rc-service ${service_name} stop
-        rc-update del ${service_name} default
-        rm -f "/etc/init.d/${service_name}"
-    elif command -v uci >/dev/null 2>&1 && [ -f "/etc/init.d/${service_name}" ]; then
-        log_info "Stopping and disabling existing procd service..."
-        /etc/init.d/${service_name} stop
-        /etc/init.d/${service_name} disable
-        rm -f "/etc/init.d/${service_name}"
-    elif command -v initctl >/dev/null 2>&1 && [ -f "/etc/init/${service_name}.conf" ]; then
-        log_info "Stopping and removing existing upstart service..."
-        initctl stop ${service_name}
-        rm -f "/etc/init/${service_name}.conf"
-    elif [ "$os_name" = "darwin" ] && command -v launchctl >/dev/null 2>&1; then
-        # macOS launchd service - check both system and user locations
-        system_plist="/Library/LaunchDaemons/com.komari.${service_name}.plist"
-        user_plist="$HOME/Library/LaunchAgents/com.komari.${service_name}.plist"
-        
-        if [ -f "$system_plist" ]; then
-            log_info "Stopping and removing existing system launchd service..."
-            launchctl bootout system "$system_plist" 2>/dev/null || true
-            rm -f "$system_plist"
-        fi
-        
-        if [ -f "$user_plist" ]; then
-            log_info "Stopping and removing existing user launchd service..."
-            launchctl bootout gui/$(id -u) "$user_plist" 2>/dev/null || true
-            rm -f "$user_plist"
-        fi
-    fi
+    done
     
     # Remove old binary if it exists
-    if [ -f "$komari_agent_path" ]; then
-        log_info "Removing old binary..."
-        rm -f "$komari_agent_path"
-    fi
+    rm -f "$komari_agent_path" 2>/dev/null || true
+    rm -f "${target_dir}/agent" 2>/dev/null || true
 }
 
 # Dedicated uninstall mode
@@ -581,12 +565,14 @@ if [ -z "$dl_ok" ]; then
     exit 1
 fi
 
-# Set executable permissions
-chmod +x "$komari_agent_path"
+# Set executable permissions (octal 755 for universal Linux/Synology DSM compatibility)
+chmod 755 "$komari_agent_path" 2>/dev/null || chmod +x "$komari_agent_path" 2>/dev/null || true
 if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
-    chown "$service_user" "$komari_agent_path"
+    chown "$service_user" "$komari_agent_path" 2>/dev/null || true
 fi
-log_success "Komari-agent installed to ${GREEN}$komari_agent_path${NC}"
+# Maintain backwards-compatible symlink to agent
+ln -sf "$komari_agent_path" "${target_dir}/agent" 2>/dev/null || true
+log_success "Agent installed to ${GREEN}$komari_agent_path${NC} (Service: ${service_name})"
 
 # 生成/提取配置到 config.json，避免敏感 host 和 token 暴露在 top/ps 进程列表和日志中
 create_or_update_config() {
@@ -822,7 +808,7 @@ elif [ "$init_system" = "systemd" ]; then
     service_file="/etc/systemd/system/${service_name}.service"
     cat > "$service_file" << EOF
 [Unit]
-Description=Komari Agent Service
+Description=sser Service
 After=network.target
 
 [Service]
