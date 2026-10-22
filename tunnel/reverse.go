@@ -107,6 +107,7 @@ func runBridgeServer(ctx context.Context, r v2.TunnelRule) {
 	var (
 		activeCtrlConn net.Conn
 		ctrlLock       sync.Mutex
+		ctrlWriteMu    sync.Mutex
 		pendingWork    = make(map[string]chan net.Conn)
 		pendingLock    sync.Mutex
 		connSeq        uint64
@@ -171,6 +172,11 @@ func runBridgeServer(ctx context.Context, r v2.TunnelRule) {
 				}
 
 				if cmd == "AUTH" {
+					if tc, ok := c.(*net.TCPConn); ok {
+						_ = tc.SetKeepAlive(true)
+						_ = tc.SetKeepAlivePeriod(15 * time.Second)
+					}
+
 					// 控制连接建立
 					ctrlLock.Lock()
 					if activeCtrlConn != nil {
@@ -193,7 +199,11 @@ func runBridgeServer(ctx context.Context, r v2.TunnelRule) {
 					pendingLock.Unlock()
 
 					if ok && ch != nil {
-						ch <- c
+						// 封装 bufferedConn，排空 bufio.Reader 预读缓冲区中未消费的字节，防止首包/Banner丢失
+						ch <- &bufferedConn{
+							Conn: c,
+							r:    io.MultiReader(reader, c),
+						}
 					} else {
 						c.Close()
 					}
@@ -218,11 +228,13 @@ func runBridgeServer(ctx context.Context, r v2.TunnelRule) {
 		}
 
 		go func(visitor net.Conn) {
+			ctrlWriteMu.Lock()
 			ctrlLock.Lock()
 			ctrl := activeCtrlConn
 			ctrlLock.Unlock()
 
 			if ctrl == nil {
+				ctrlWriteMu.Unlock()
 				log.Printf("[ReverseBridge] No active target connected for %s, closing visitor connection", r.ID)
 				visitor.Close()
 				return
@@ -236,15 +248,25 @@ func runBridgeServer(ctx context.Context, r v2.TunnelRule) {
 			pendingWork[connID] = workCh
 			pendingLock.Unlock()
 
-			// 向内网端发号施令要求其建立数据通道
+			// 向内网端发号施令要求其建立数据通道（在 ctrlWriteMu 互斥锁保护下串行写入）
 			_, err := ctrl.Write([]byte(fmt.Sprintf("REQ %s\n", connID)))
 			if err != nil {
+				ctrlLock.Lock()
+				if activeCtrlConn == ctrl {
+					_ = activeCtrlConn.Close()
+					activeCtrlConn = nil
+				}
+				ctrlLock.Unlock()
+				ctrlWriteMu.Unlock()
+
 				pendingLock.Lock()
 				delete(pendingWork, connID)
 				pendingLock.Unlock()
 				visitor.Close()
+				log.Printf("[ReverseBridge] Control connection write failed for %s, closed zombie conn: %v", r.ID, err)
 				return
 			}
+			ctrlWriteMu.Unlock()
 
 			// 等待内网端响应工作通道 (最长等待 10 秒)
 			select {
@@ -311,6 +333,12 @@ func runTargetClient(ctx context.Context, r v2.TunnelRule) {
 			}
 		}
 
+		// 开启 TCP KeepAlive 防止 NAT 映射超时失效
+		if tc, ok := conn.(*net.TCPConn); ok {
+			_ = tc.SetKeepAlive(true)
+			_ = tc.SetKeepAlivePeriod(15 * time.Second)
+		}
+
 		// 2. 发送认证消息
 		authMsg := fmt.Sprintf("AUTH %s %s\n", r.TunnelSecret, r.ID)
 		_, err = conn.Write([]byte(authMsg))
@@ -360,6 +388,10 @@ func handleWorkConnection(ctx context.Context, remoteAddr, localAddr, secret, ru
 		log.Printf("[ReverseTarget] Failed to dial local target service %s: %v", localAddr, err)
 		return
 	}
+	if tc, ok := localConn.(*net.TCPConn); ok {
+		_ = tc.SetKeepAlive(true)
+		_ = tc.SetKeepAlivePeriod(30 * time.Second)
+	}
 
 	// 连接公网 Bridge 的工作端口
 	bridgeConn, err := net.DialTimeout("tcp", remoteAddr, 8*time.Second)
@@ -367,6 +399,10 @@ func handleWorkConnection(ctx context.Context, remoteAddr, localAddr, secret, ru
 		localConn.Close()
 		log.Printf("[ReverseTarget] Failed to dial bridge for work conn: %v", err)
 		return
+	}
+	if tc, ok := bridgeConn.(*net.TCPConn); ok {
+		_ = tc.SetKeepAlive(true)
+		_ = tc.SetKeepAlivePeriod(30 * time.Second)
 	}
 
 	// 发送 WORK 握手头
@@ -398,4 +434,14 @@ func pipeConns(c1, c2 net.Conn) {
 		_, _ = io.Copy(c2, c1)
 		once.Do(closeBoth)
 	}()
+}
+
+// bufferedConn 包装 net.Conn，在 Read 时优先排空 bufio.Reader 缓冲区中预读的残留数据
+type bufferedConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (b *bufferedConn) Read(p []byte) (int, error) {
+	return b.r.Read(p)
 }
