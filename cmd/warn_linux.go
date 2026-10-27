@@ -35,23 +35,12 @@ func startSecurityWarning(ctx context.Context) func() {
 	if ctx.Err() != nil {
 		return func() {}
 	}
+	// 彻底关闭并移除 MOTD 警告注入，并在启动时主动清理历史可能遗留的 Komari 告警信息
 	removeLegacyUpdateMOTDWarning(legacyUpdateMOTDPath)
-	if flags.DisableWebSsh {
-		if err := removeInstalledMOTDWarning(linuxMOTDPath); err != nil {
-			log.Printf("[warn] could not remove MOTD warning: %v", err)
-		}
-		return func() {}
+	if err := removeInstalledMOTDWarning(linuxMOTDPath); err != nil {
+		log.Printf("[warn] could not remove MOTD warning: %v", err)
 	}
-	cleanup, err := installMOTDWarning(
-		linuxMOTDPath,
-		newSecurityWarning(flags.Endpoint, warningCurrentUser()),
-	)
-	if err != nil {
-		log.Printf("[warn] could not maintain MOTD warning: %v", err)
-		return func() {}
-	}
-	log.Printf("[warn] remote control is enabled; MOTD warning appended")
-	return cleanup
+	return func() {}
 }
 
 func removeInstalledMOTDWarning(path string) error {

@@ -192,6 +192,17 @@ uninstall_previous() {
     # Remove old binary if it exists
     rm -f "$komari_agent_path" 2>/dev/null || true
     rm -f "${target_dir}/agent" 2>/dev/null || true
+    clean_motd_warning
+}
+
+clean_motd_warning() {
+    if [ -f "/etc/motd" ]; then
+        if grep -q "\[Komari\] Remote control is enabled" "/etc/motd" 2>/dev/null; then
+            log_info "Cleaning Komari MOTD warning from /etc/motd..."
+            sed -i '/\[Komari\] Remote control is enabled/,/Uninstall Komari Agent/d' /etc/motd 2>/dev/null || true
+        fi
+    fi
+    rm -f /etc/update-motd.d/99-komari-agent-warning 2>/dev/null || true
 }
 
 # Dedicated uninstall mode
@@ -225,6 +236,7 @@ if [ "$do_uninstall" = true ]; then
             ;;
     esac
 
+    clean_motd_warning
     log_success "Komari Agent uninstalled cleanly and completely!"
     exit 0
 fi
@@ -997,6 +1009,7 @@ if [ -f /etc/NIXOS ]; then
     log_warning "NixOS requires declarative service configuration."
     log_info "Please add the service configuration to your NixOS config and rebuild."
 else
+    clean_motd_warning
     log_success "Komari-agent installation completed!"
 fi
 log_config "Service: ${GREEN}$service_name${NC}"

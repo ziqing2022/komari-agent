@@ -21,11 +21,6 @@ import (
 )
 
 func startSecurityWarning(ctx context.Context) func() {
-	if flags.DisableWebSsh {
-		return func() {}
-	}
-	warning := newSecurityWarning(flags.Endpoint, warningCurrentUser())
-	go warnWindowsSessions(ctx, warning)
 	return func() {}
 }
 
