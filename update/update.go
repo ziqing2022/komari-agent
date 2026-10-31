@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/blang/semver"
-	"github.com/ziqing2022/komari-agent/dnsresolver"
 	"github.com/rhysd/go-github-selfupdate/selfupdate"
+	"github.com/ziqing2022/komari-agent/dnsresolver"
 )
 
 var ErrRestartRequired = errors.New("update installed; restart required")
@@ -103,6 +103,28 @@ func expectedAssetName(goos, goarch string) string {
 	return name
 }
 
+// detectEffectiveArch 决定目标更新资产的架构。
+// 在 Linux 32 位 ARM 上（无论系统内核报告为 armv7l 还是 armv5tel），
+// 如果 CPU 缺少硬件浮点单元（VFP），必须使用纯软浮点的 "armv5" 二进制，
+// 否则执行默认 GOARM=7 的二进制会立刻触发 SIGILL（非法指令）硬件异常崩溃。
+func detectEffectiveArch(goos, goarch string) string {
+	if goos == "linux" && (goarch == "arm" || goarch == "armv5") {
+		if lacksVFP() {
+			return "armv5"
+		}
+	}
+	return goarch
+}
+
+func lacksVFP() bool {
+	data, err := os.ReadFile("/proc/cpuinfo")
+	if err != nil {
+		return false
+	}
+	content := strings.ToLower(string(data))
+	return !strings.Contains(content, "vfp") && !strings.Contains(content, "neon")
+}
+
 func findReleaseAsset(release githubRelease, assetName string) (githubReleaseAsset, bool) {
 	for _, asset := range release.Assets {
 		if asset.Name == assetName {
@@ -139,6 +161,49 @@ func selectLatestSnapshotRelease(releases []githubRelease, assetName string) (sn
 			candidate.PublishedAt.After(latest.PublishedAt) ||
 			(candidate.PublishedAt.Equal(latest.PublishedAt) && candidate.TagName > latest.TagName) {
 			latest = candidate
+			found = true
+		}
+	}
+
+	return latest, found
+}
+
+func selectLatestStableRelease(releases []githubRelease, currentVersion semver.Version, assetName string) (snapshotReleaseCandidate, bool) {
+	var latest snapshotReleaseCandidate
+	found := false
+	var bestVer semver.Version
+
+	for _, release := range releases {
+		if release.Draft || release.Prerelease || strings.HasPrefix(release.TagName, snapshotVersionPrefix) {
+			continue
+		}
+
+		ver, err := parseVersion(release.TagName)
+		if err != nil {
+			continue
+		}
+
+		if !ver.GT(currentVersion) {
+			continue
+		}
+
+		asset, ok := findReleaseAsset(release, assetName)
+		if !ok {
+			continue
+		}
+
+		candidate := snapshotReleaseCandidate{
+			TagName:     release.TagName,
+			Name:        release.Name,
+			Body:        release.Body,
+			HTMLURL:     release.HTMLURL,
+			PublishedAt: release.PublishedAt,
+			Asset:       asset,
+		}
+
+		if !found || ver.GT(bestVer) || (ver.Equals(bestVer) && candidate.PublishedAt.After(latest.PublishedAt)) {
+			latest = candidate
+			bestVer = ver
 			found = true
 		}
 	}
@@ -268,7 +333,41 @@ func runScheduledUpdates(ticks <-chan time.Time, check func() error, onRestartRe
 	}
 }
 
-func checkAndUpdateStable(currentSemVer semver.Version, updater selfUpdater) error {
+func checkAndUpdateStable(currentSemVer semver.Version, updater selfUpdater, listReleases releaseLister) error {
+	effArch := detectEffectiveArch(runtime.GOOS, runtime.GOARCH)
+	// 针对无硬件浮点的 ARM 设备（如海思 Hi3535、老群晖 Kirkwood/Armada 等）：
+	// 第三方自更新库只使用 GOARCH=arm，会无脑下载带硬件浮点的 komari-agent-linux-arm 导致暴毙。
+	// 这里通过自定义 Release 资产匹配逻辑，精确匹配并下载对应的 komari-agent-linux-armv5。
+	if effArch != runtime.GOARCH && listReleases != nil {
+		owner, repo, err := splitRepoSlug(Repo)
+		if err != nil {
+			return err
+		}
+		releases, err := listReleases(owner, repo)
+		if err != nil {
+			return err
+		}
+		assetName := expectedAssetName(runtime.GOOS, effArch)
+		latest, found := selectLatestStableRelease(releases, currentSemVer, assetName)
+		if !found {
+			log.Println("Current version is the latest:", CurrentVersion)
+			return nil
+		}
+
+		cmdPath, err := currentExecutablePath()
+		if err != nil {
+			return fmt.Errorf("failed to resolve current executable path: %w", err)
+		}
+
+		log.Printf("Will update %s from %s to %s (%s)\n", cmdPath, CurrentVersion, latest.TagName, assetName)
+		if err := updater.UpdateTo(selfUpdateReleaseFromSnapshot(owner, repo, latest), cmdPath); err != nil {
+			return fmt.Errorf("failed to update to %s: %w", latest.TagName, err)
+		}
+
+		log.Printf("Successfully updated to version %s\n", latest.TagName)
+		return ErrRestartRequired
+	}
+
 	latest, err := updater.UpdateSelf(currentSemVer, Repo)
 	if err != nil {
 		return fmt.Errorf("failed to check for updates: %v", err)
@@ -278,18 +377,6 @@ func checkAndUpdateStable(currentSemVer semver.Version, updater selfUpdater) err
 		log.Println("Current version is the latest:", CurrentVersion)
 		return nil
 	}
-	// Default is installed as a service, so don't automatically restart
-	//execPath, err := os.Executable()
-	//if err != nil {
-	//	return fmt.Errorf("failed to get current executable path: %v", err)
-	//}
-
-	// _, err = os.StartProcess(execPath, os.Args, &os.ProcAttr{
-	// 	Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
-	// })
-	// if err != nil {
-	// 	return fmt.Errorf("failed to restart program: %v", err)
-	// }
 	log.Printf("Successfully updated to version %s\n", latest.Version)
 	return ErrRestartRequired
 }
@@ -310,7 +397,7 @@ func checkAndUpdateSnapshot(updater selfUpdater, listReleases releaseLister, isC
 		return err
 	}
 
-	assetName := expectedAssetName(runtime.GOOS, runtime.GOARCH)
+	assetName := expectedAssetName(runtime.GOOS, detectEffectiveArch(runtime.GOOS, runtime.GOARCH))
 	latest, found := selectLatestSnapshotRelease(releases, assetName)
 	if !found {
 		log.Printf("No suitable snapshot release asset was found for %s. Current snapshot is considered up-to-date.", assetName)
@@ -355,5 +442,5 @@ func CheckAndUpdate() error {
 		return fmt.Errorf("failed to parse current version: %v", err)
 	}
 
-	return checkAndUpdateStable(currentSemVer, updater)
+	return checkAndUpdateStable(currentSemVer, updater, listGitHubReleases)
 }

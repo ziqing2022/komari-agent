@@ -212,8 +212,39 @@ func TestStableUpdateReturnsRestartRequired(t *testing.T) {
 		},
 	}
 
-	if err := checkAndUpdateStable(current, updater); !errors.Is(err, ErrRestartRequired) {
+	if err := checkAndUpdateStable(current, updater, nil); !errors.Is(err, ErrRestartRequired) {
 		t.Fatalf("checkAndUpdateStable() error = %v, want ErrRestartRequired", err)
+	}
+}
+
+func TestSelectLatestStableRelease(t *testing.T) {
+	assetName := "komari-agent-linux-armv5"
+	base := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+
+	releases := []githubRelease{
+		testRelease("v1.2.9", false, false, base, assetName),
+		testRelease("v1.2.10", false, false, base.Add(time.Hour), assetName),
+		testRelease("v1.2.11", false, false, base.Add(2*time.Hour), assetName),
+		testRelease("v1.2.12-beta", true, false, base.Add(3*time.Hour), assetName),
+		testRelease("Snapshot-2610201200", true, false, base.Add(4*time.Hour), assetName),
+	}
+
+	current := semver.MustParse("1.2.10")
+	got, ok := selectLatestStableRelease(releases, current, assetName)
+	if !ok {
+		t.Fatalf("selectLatestStableRelease() should find v1.2.11")
+	}
+	if got.TagName != "v1.2.11" {
+		t.Errorf("selectLatestStableRelease() = %q, want v1.2.11", got.TagName)
+	}
+}
+
+func TestDetectEffectiveArch(t *testing.T) {
+	if got := detectEffectiveArch("darwin", "arm64"); got != "arm64" {
+		t.Errorf("detectEffectiveArch(darwin, arm64) = %q, want arm64", got)
+	}
+	if got := detectEffectiveArch("linux", "amd64"); got != "amd64" {
+		t.Errorf("detectEffectiveArch(linux, amd64) = %q, want amd64", got)
 	}
 }
 

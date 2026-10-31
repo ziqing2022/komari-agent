@@ -357,11 +357,19 @@ case $arch in
                 ;;
         esac
         ;;
-    armv7*|armv6*)
+    armv7*|armv6*|arm|armhf|armel)
         # ARM 32-bit support
         case $os_name in
             freebsd|linux)
-                arch="arm"
+                # 检查 CPU 是否具备硬件浮点协处理器 (VFP)
+                # 许多嵌入式芯片 (如海思 Hi3535、全志、老群晖 Armada/Kirkwood 等) 虽报告为 armv7l，但硬件无 VFP。
+                # 若无 VFP，运行默认 GOARM=7 的二进制会立刻触发 SIGILL (Illegal instruction) 崩溃，必须回退到纯软浮点 armv5！
+                if [ "$os_name" = "linux" ] && [ -f /proc/cpuinfo ] && ! grep -qi "vfp" /proc/cpuinfo; then
+                    arch="armv5"
+                    log_warning "ARM 32-bit CPU lacks hardware floating-point unit (VFP). Falling back to pure soft-float: armv5"
+                else
+                    arch="arm"
+                fi
                 ;;
             *)
                 log_error "32-bit ARM architecture not supported on $os_name"
@@ -453,7 +461,7 @@ if ! mkdir -p "$target_dir" 2>/dev/null; then
         for alt_dir in "/usr/local/komari" "/usr/bin" "$HOME/.komari"; do
             if mkdir -p "$alt_dir" 2>/dev/null || [ -d "$alt_dir" ]; then
                 target_dir="$alt_dir"
-                komari_agent_path="${target_dir}/agent"
+                komari_agent_path="${target_dir}/${service_name}"
                 log_warning "Cannot create /opt/komari, falling back to: ${GREEN}$target_dir${NC}"
                 break
             fi
