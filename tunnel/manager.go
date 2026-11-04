@@ -336,8 +336,12 @@ func syncFirewallPorts(oldRules, newRules []v2.TunnelRule) {
 				continue // 内网端无需入站端口
 			}
 			newMap[r.ListenPort] = r
-			if r.IsReverse && strings.ToLower(r.Role) == "bridge" && r.ControlPort > 0 {
-				newMap[r.ControlPort] = r
+			if r.IsReverse && strings.ToLower(r.Role) == "bridge" {
+				ctrlPort := r.ControlPort
+				if ctrlPort <= 0 {
+					ctrlPort = 27888
+				}
+				newMap[ctrlPort] = r
 			}
 		}
 	}

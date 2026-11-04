@@ -35,45 +35,50 @@ func ClosePort(port int, protocol string) error {
 	}
 }
 
-// openPortLinux 依次尝试 ufw, firewalld, iptables
+// openPortLinux 优先采用通用 iptables -I INPUT 幂等插入方式放行端口，全方位兼容甲骨文云、群晖及所有常见发行版
 func openPortLinux(port int, protocol string) error {
 	protos := parseProtocols(protocol)
 	pStr := strconv.Itoa(port)
 
-	// 1. 尝试 UFW
+	// 1. 优先使用通用 iptables -I INPUT 插入到最顶行（绝对覆盖并优先于底层任何 DROP / REJECT 规则生效）
+	if isCommandAvailable("iptables") {
+		for _, proto := range protos {
+			// 先用 -C 检查是否已存在，防止重复插入堆叠
+			checkCmd := exec.Command("iptables", "-C", "INPUT", "-p", proto, "--dport", pStr, "-j", "ACCEPT")
+			if checkCmd.Run() != nil {
+				addCmd := exec.Command("iptables", "-I", "INPUT", "-p", proto, "--dport", pStr, "-j", "ACCEPT")
+				if err := addCmd.Run(); err == nil {
+					log.Printf("[Firewall] iptables -I INPUT -p %s --dport %s -j ACCEPT succeeded", proto, pStr)
+				}
+			}
+		}
+	}
+
+	// 2. 同步支持 ip6tables (IPv6 入站放行)
+	if isCommandAvailable("ip6tables") {
+		for _, proto := range protos {
+			checkCmd := exec.Command("ip6tables", "-C", "INPUT", "-p", proto, "--dport", pStr, "-j", "ACCEPT")
+			if checkCmd.Run() != nil {
+				_ = exec.Command("ip6tables", "-I", "INPUT", "-p", proto, "--dport", pStr, "-j", "ACCEPT").Run()
+			}
+		}
+	}
+
+	// 3. 补充通知 UFW (若系统开启了 ufw)
 	if isCommandAvailable("ufw") {
 		for _, proto := range protos {
 			cmd := exec.Command("ufw", "allow", fmt.Sprintf("%s/%s", pStr, proto))
-			if out, err := cmd.CombinedOutput(); err == nil {
-				log.Printf("[Firewall] ufw allow %s/%s succeeded: %s", pStr, proto, strings.TrimSpace(string(out)))
-			}
+			_ = cmd.Run()
 		}
-		return nil
 	}
 
-	// 2. 尝试 firewalld
+	// 4. 补充通知 firewalld (若系统开启了 firewalld)
 	if isCommandAvailable("firewall-cmd") {
 		for _, proto := range protos {
 			cmd := exec.Command("firewall-cmd", fmt.Sprintf("--add-port=%s/%s", pStr, proto), "--permanent")
 			_ = cmd.Run()
 		}
 		_ = exec.Command("firewall-cmd", "--reload").Run()
-		log.Printf("[Firewall] firewalld opened port %s (%s)", pStr, protocol)
-		return nil
-	}
-
-	// 3. 兜底尝试 iptables
-	if isCommandAvailable("iptables") {
-		for _, proto := range protos {
-			// 先检查是否存在以防重复添加
-			checkCmd := exec.Command("iptables", "-C", "INPUT", "-p", proto, "--dport", pStr, "-j", "ACCEPT")
-			if checkCmd.Run() != nil {
-				addCmd := exec.Command("iptables", "-I", "INPUT", "1", "-p", proto, "--dport", pStr, "-j", "ACCEPT")
-				_ = addCmd.Run()
-			}
-		}
-		log.Printf("[Firewall] iptables rule inserted for port %s (%s)", pStr, protocol)
-		return nil
 	}
 
 	return nil
@@ -83,11 +88,22 @@ func closePortLinux(port int, protocol string) error {
 	protos := parseProtocols(protocol)
 	pStr := strconv.Itoa(port)
 
+	if isCommandAvailable("iptables") {
+		for _, proto := range protos {
+			_ = exec.Command("iptables", "-D", "INPUT", "-p", proto, "--dport", pStr, "-j", "ACCEPT").Run()
+		}
+	}
+
+	if isCommandAvailable("ip6tables") {
+		for _, proto := range protos {
+			_ = exec.Command("ip6tables", "-D", "INPUT", "-p", proto, "--dport", pStr, "-j", "ACCEPT").Run()
+		}
+	}
+
 	if isCommandAvailable("ufw") {
 		for _, proto := range protos {
 			_ = exec.Command("ufw", "delete", "allow", fmt.Sprintf("%s/%s", pStr, proto)).Run()
 		}
-		return nil
 	}
 
 	if isCommandAvailable("firewall-cmd") {
@@ -95,14 +111,6 @@ func closePortLinux(port int, protocol string) error {
 			_ = exec.Command("firewall-cmd", fmt.Sprintf("--remove-port=%s/%s", pStr, proto), "--permanent").Run()
 		}
 		_ = exec.Command("firewall-cmd", "--reload").Run()
-		return nil
-	}
-
-	if isCommandAvailable("iptables") {
-		for _, proto := range protos {
-			_ = exec.Command("iptables", "-D", "INPUT", "-p", proto, "--dport", pStr, "-j", "ACCEPT").Run()
-		}
-		return nil
 	}
 
 	return nil

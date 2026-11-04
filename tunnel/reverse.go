@@ -15,11 +15,21 @@ import (
 )
 
 var (
-	reverseLock sync.Mutex
-	reverseCancels = make(map[string]context.CancelFunc)
+	reverseLock       sync.Mutex
+	reverseCancels    = make(map[string]context.CancelFunc)
+	reverseSignatures = make(map[string]string)
 )
 
+func ruleSignature(r v2.TunnelRule) string {
+	role := strings.ToLower(strings.TrimSpace(r.Role))
+	return fmt.Sprintf("%s|%s|%d|%d|%d|%d|%s|%s|%s|%s|%t",
+		r.ID, role, r.ListenPort, r.BridgePort, r.ControlPort, r.TargetPort,
+		r.TargetHost, r.TargetType, r.BridgeHost, r.TunnelSecret, r.Enabled,
+	)
+}
+
 // SyncReverseTunnels 根据下发的规则同步运行反向穿透 (Bridge 公网端 或 Target 内网端)
+// 支持配置变更毫秒级自动热加载与旧任务平滑释放
 func SyncReverseTunnels(rules []v2.TunnelRule) {
 	reverseLock.Lock()
 	defer reverseLock.Unlock()
@@ -31,14 +41,25 @@ func SyncReverseTunnels(rules []v2.TunnelRule) {
 			continue
 		}
 		activeRuleIDs[r.ID] = true
+		sig := ruleSignature(r)
 
-		// 如果已经在运行，先不重复启动
-		if _, exists := reverseCancels[r.ID]; exists {
-			continue
+		// 检查是否已经在运行
+		if oldCancel, exists := reverseCancels[r.ID]; exists {
+			if reverseSignatures[r.ID] == sig {
+				// 配置完全一致，继续稳定运行，无需打扰现有连接
+				continue
+			}
+			// 配置发生变更：优雅取消旧任务并释放旧端口
+			log.Printf("[ReverseTunnel] Rule %s config changed, hot-reloading...", r.ID)
+			oldCancel()
+			delete(reverseCancels, r.ID)
+			delete(reverseSignatures, r.ID)
+			time.Sleep(100 * time.Millisecond) // 等待旧 listener / socket 释放
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
 		reverseCancels[r.ID] = cancel
+		reverseSignatures[r.ID] = sig
 
 		role := strings.ToLower(strings.TrimSpace(r.Role))
 		if role == "bridge" {
@@ -53,6 +74,7 @@ func SyncReverseTunnels(rules []v2.TunnelRule) {
 		if !activeRuleIDs[id] {
 			cancel()
 			delete(reverseCancels, id)
+			delete(reverseSignatures, id)
 			log.Printf("[ReverseTunnel] Stopped reverse rule: %s", id)
 		}
 	}
@@ -65,12 +87,222 @@ func StopAllReverseTunnels() {
 	for id, cancel := range reverseCancels {
 		cancel()
 		delete(reverseCancels, id)
+		delete(reverseSignatures, id)
 	}
 }
 
 // ==========================================
-// 1. 公网端 (Bridge Server) 引擎
+// 1. 公网端 (Bridge Server) 引擎 (多规则控制端口多路复用)
 // ==========================================
+
+type bridgeRuleSession struct {
+	rule        v2.TunnelRule
+	activeCtrl  net.Conn
+	ctrlLock    sync.Mutex
+	ctrlWriteMu sync.Mutex
+	pendingWork map[string]chan net.Conn
+	pendingLock sync.Mutex
+	connSeq     uint64
+}
+
+type bridgeControlHub struct {
+	port     int
+	listener net.Listener
+	mu       sync.RWMutex
+	rules    map[string]*bridgeRuleSession // ruleID -> session
+	refCount int
+	cancel   context.CancelFunc
+}
+
+var (
+	bridgeHubsMu sync.Mutex
+	bridgeHubs   = make(map[int]*bridgeControlHub) // controlPort -> hub
+)
+
+// registerBridgeSession 注册规则会话到指定控制端口的共享 Hub (同端口多规则多路复用)
+func registerBridgeSession(r v2.TunnelRule, controlPort int) (*bridgeRuleSession, error) {
+	bridgeHubsMu.Lock()
+	defer bridgeHubsMu.Unlock()
+
+	hub, exists := bridgeHubs[controlPort]
+	if !exists {
+		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", controlPort))
+		if err != nil {
+			return nil, fmt.Errorf("failed to listen control port %d: %w", controlPort, err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		hub = &bridgeControlHub{
+			port:     controlPort,
+			listener: listener,
+			rules:    make(map[string]*bridgeRuleSession),
+			cancel:   cancel,
+		}
+		bridgeHubs[controlPort] = hub
+
+		// 启动共享控制端口的 Accept 调度循环
+		go hub.runAcceptLoop(ctx)
+		log.Printf("[ReverseBridge] Started shared control hub on port %d", controlPort)
+	}
+
+	session := &bridgeRuleSession{
+		rule:        r,
+		pendingWork: make(map[string]chan net.Conn),
+	}
+
+	hub.mu.Lock()
+	hub.rules[r.ID] = session
+	hub.refCount++
+	hub.mu.Unlock()
+
+	return session, nil
+}
+
+// unregisterBridgeSession 从 Hub 注销规则会话，若该端口无规则运行则自动关闭控制端口监听
+func unregisterBridgeSession(ruleID string, controlPort int) {
+	bridgeHubsMu.Lock()
+	defer bridgeHubsMu.Unlock()
+
+	hub, exists := bridgeHubs[controlPort]
+	if !exists {
+		return
+	}
+
+	hub.mu.Lock()
+	session, found := hub.rules[ruleID]
+	if found {
+		delete(hub.rules, ruleID)
+		hub.refCount--
+
+		session.ctrlLock.Lock()
+		if session.activeCtrl != nil {
+			session.activeCtrl.Close()
+			session.activeCtrl = nil
+		}
+		session.ctrlLock.Unlock()
+
+		session.pendingLock.Lock()
+		for _, ch := range session.pendingWork {
+			close(ch)
+		}
+		session.pendingWork = make(map[string]chan net.Conn)
+		session.pendingLock.Unlock()
+	}
+	remaining := hub.refCount
+	hub.mu.Unlock()
+
+	if remaining <= 0 {
+		if hub.cancel != nil {
+			hub.cancel()
+		}
+		if hub.listener != nil {
+			hub.listener.Close()
+		}
+		delete(bridgeHubs, controlPort)
+		log.Printf("[ReverseBridge] Closed shared control hub on port %d", controlPort)
+	}
+}
+
+func (hub *bridgeControlHub) getSession(ruleID string) *bridgeRuleSession {
+	hub.mu.RLock()
+	defer hub.mu.RUnlock()
+	return hub.rules[ruleID]
+}
+
+func (hub *bridgeControlHub) runAcceptLoop(ctx context.Context) {
+	defer hub.listener.Close()
+
+	for {
+		conn, err := hub.listener.Accept()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+		}
+
+		go hub.handleInboundControlConn(conn)
+	}
+}
+
+func (hub *bridgeControlHub) handleInboundControlConn(c net.Conn) {
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+	reader := bufio.NewReader(c)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		c.Close()
+		return
+	}
+	c.SetDeadline(time.Time{})
+
+	line = strings.TrimSpace(line)
+	parts := strings.Split(line, " ")
+	if len(parts) < 3 {
+		c.Close()
+		return
+	}
+
+	cmd := parts[0]
+	secret := parts[1]
+	ruleID := parts[2]
+
+	session := hub.getSession(ruleID)
+	if session == nil {
+		log.Printf("[ReverseBridge] Rejecting connection for unregistered rule %s from %s", ruleID, c.RemoteAddr())
+		c.Close()
+		return
+	}
+
+	// 密码认证（若规则配置了密钥则严格比对）
+	if session.rule.TunnelSecret != "" && secret != session.rule.TunnelSecret {
+		log.Printf("[ReverseBridge] Invalid auth secret for rule %s from %s", ruleID, c.RemoteAddr())
+		c.Close()
+		return
+	}
+
+	if cmd == "AUTH" {
+		if tc, ok := c.(*net.TCPConn); ok {
+			_ = tc.SetKeepAlive(true)
+			_ = tc.SetKeepAlivePeriod(15 * time.Second)
+		}
+
+		// 控制连接建立
+		session.ctrlLock.Lock()
+		if session.activeCtrl != nil {
+			session.activeCtrl.Close()
+		}
+		session.activeCtrl = c
+		session.ctrlLock.Unlock()
+
+		_, _ = c.Write([]byte("OK\n"))
+		log.Printf("[ReverseBridge] Target node successfully registered control tunnel for %s from %s", ruleID, c.RemoteAddr())
+
+	} else if cmd == "WORK" && len(parts) >= 4 {
+		// 工作数据通道到达
+		connID := parts[3]
+		session.pendingLock.Lock()
+		ch, ok := session.pendingWork[connID]
+		if ok {
+			delete(session.pendingWork, connID)
+		}
+		session.pendingLock.Unlock()
+
+		if ok && ch != nil {
+			// 封装 bufferedConn，排空 bufio.Reader 预读缓冲区中未消费的字节，防止首包丢失
+			ch <- &bufferedConn{
+				Conn: c,
+				r:    io.MultiReader(reader, c),
+			}
+		} else {
+			c.Close()
+		}
+	} else {
+		c.Close()
+	}
+}
 
 func runBridgeServer(ctx context.Context, r v2.TunnelRule) {
 	controlPort := r.ControlPort
@@ -86,132 +318,27 @@ func runBridgeServer(ctx context.Context, r v2.TunnelRule) {
 		return
 	}
 
-	log.Printf("[ReverseBridge] Starting bridge for rule %s: PublicPort=%d, ControlPort=%d", r.ID, publicPort, controlPort)
-
-	// 监听内网端连接的控制端口
-	ctrlListener, err := net.Listen("tcp", fmt.Sprintf(":%d", controlPort))
+	// 1. 注册到共享控制端口 Hub (多个规则可无缝复用同一个 controlPort)
+	session, err := registerBridgeSession(r, controlPort)
 	if err != nil {
-		log.Printf("[ReverseBridge] Failed to listen control port %d: %v", controlPort, err)
+		log.Printf("[ReverseBridge] %v", err)
 		return
 	}
-	defer ctrlListener.Close()
+	defer unregisterBridgeSession(r.ID, controlPort)
 
-	// 监听外部访客访问的公网业务端口
+	// 2. 监听外部访客访问的公网业务端口
 	pubListener, err := net.Listen("tcp", fmt.Sprintf(":%d", publicPort))
 	if err != nil {
-		log.Printf("[ReverseBridge] Failed to listen public port %d: %v", publicPort, err)
+		log.Printf("[ReverseBridge] Failed to listen public port %d for rule %s: %v", publicPort, r.ID, err)
 		return
 	}
 	defer pubListener.Close()
 
-	var (
-		activeCtrlConn net.Conn
-		ctrlLock       sync.Mutex
-		ctrlWriteMu    sync.Mutex
-		pendingWork    = make(map[string]chan net.Conn)
-		pendingLock    sync.Mutex
-		connSeq        uint64
-	)
+	log.Printf("[ReverseBridge] Starting bridge for rule %s: PublicPort=%d, ControlPort=%d", r.ID, publicPort, controlPort)
 
-	// 退出清理
 	go func() {
 		<-ctx.Done()
-		ctrlListener.Close()
 		pubListener.Close()
-		ctrlLock.Lock()
-		if activeCtrlConn != nil {
-			activeCtrlConn.Close()
-		}
-		ctrlLock.Unlock()
-	}()
-
-	// 接收内网客户端的控制/工作连接
-	go func() {
-		for {
-			conn, err := ctrlListener.Accept()
-			if err != nil {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					time.Sleep(100 * time.Millisecond)
-					continue
-				}
-			}
-
-			go func(c net.Conn) {
-				c.SetDeadline(time.Now().Add(10 * time.Second))
-				reader := bufio.NewReader(c)
-				line, err := reader.ReadString('\n')
-				if err != nil {
-					c.Close()
-					return
-				}
-				c.SetDeadline(time.Time{})
-
-				line = strings.TrimSpace(line)
-				parts := strings.Split(line, " ")
-				if len(parts) < 3 {
-					c.Close()
-					return
-				}
-
-				cmd := parts[0]
-				secret := parts[1]
-				ruleID := parts[2]
-
-				// 认证密钥与规则匹配
-				if r.TunnelSecret != "" && secret != r.TunnelSecret {
-					log.Printf("[ReverseBridge] Invalid auth secret from %s", c.RemoteAddr())
-					c.Close()
-					return
-				}
-				if ruleID != r.ID {
-					c.Close()
-					return
-				}
-
-				if cmd == "AUTH" {
-					if tc, ok := c.(*net.TCPConn); ok {
-						_ = tc.SetKeepAlive(true)
-						_ = tc.SetKeepAlivePeriod(15 * time.Second)
-					}
-
-					// 控制连接建立
-					ctrlLock.Lock()
-					if activeCtrlConn != nil {
-						activeCtrlConn.Close()
-					}
-					activeCtrlConn = c
-					ctrlLock.Unlock()
-
-					_, _ = c.Write([]byte("OK\n"))
-					log.Printf("[ReverseBridge] Target node successfully registered control tunnel for %s from %s", r.ID, c.RemoteAddr())
-
-				} else if cmd == "WORK" && len(parts) >= 4 {
-					// 工作数据通道到达
-					connID := parts[3]
-					pendingLock.Lock()
-					ch, ok := pendingWork[connID]
-					if ok {
-						delete(pendingWork, connID)
-					}
-					pendingLock.Unlock()
-
-					if ok && ch != nil {
-						// 封装 bufferedConn，排空 bufio.Reader 预读缓冲区中未消费的字节，防止首包/Banner丢失
-						ch <- &bufferedConn{
-							Conn: c,
-							r:    io.MultiReader(reader, c),
-						}
-					} else {
-						c.Close()
-					}
-				} else {
-					c.Close()
-				}
-			}(conn)
-		}
 	}()
 
 	// 接收公网外部访客连接
@@ -228,45 +355,45 @@ func runBridgeServer(ctx context.Context, r v2.TunnelRule) {
 		}
 
 		go func(visitor net.Conn) {
-			ctrlWriteMu.Lock()
-			ctrlLock.Lock()
-			ctrl := activeCtrlConn
-			ctrlLock.Unlock()
+			session.ctrlWriteMu.Lock()
+			session.ctrlLock.Lock()
+			ctrl := session.activeCtrl
+			session.ctrlLock.Unlock()
 
 			if ctrl == nil {
-				ctrlWriteMu.Unlock()
+				session.ctrlWriteMu.Unlock()
 				log.Printf("[ReverseBridge] No active target connected for %s, closing visitor connection", r.ID)
 				visitor.Close()
 				return
 			}
 
-			connSeq++
-			connID := fmt.Sprintf("%d-%d", time.Now().UnixNano(), connSeq)
+			session.connSeq++
+			connID := fmt.Sprintf("%d-%d", time.Now().UnixNano(), session.connSeq)
 			workCh := make(chan net.Conn, 1)
 
-			pendingLock.Lock()
-			pendingWork[connID] = workCh
-			pendingLock.Unlock()
+			session.pendingLock.Lock()
+			session.pendingWork[connID] = workCh
+			session.pendingLock.Unlock()
 
 			// 向内网端发号施令要求其建立数据通道（在 ctrlWriteMu 互斥锁保护下串行写入）
 			_, err := ctrl.Write([]byte(fmt.Sprintf("REQ %s\n", connID)))
 			if err != nil {
-				ctrlLock.Lock()
-				if activeCtrlConn == ctrl {
-					_ = activeCtrlConn.Close()
-					activeCtrlConn = nil
+				session.ctrlLock.Lock()
+				if session.activeCtrl == ctrl {
+					_ = session.activeCtrl.Close()
+					session.activeCtrl = nil
 				}
-				ctrlLock.Unlock()
-				ctrlWriteMu.Unlock()
+				session.ctrlLock.Unlock()
+				session.ctrlWriteMu.Unlock()
 
-				pendingLock.Lock()
-				delete(pendingWork, connID)
-				pendingLock.Unlock()
+				session.pendingLock.Lock()
+				delete(session.pendingWork, connID)
+				session.pendingLock.Unlock()
 				visitor.Close()
 				log.Printf("[ReverseBridge] Control connection write failed for %s, closed zombie conn: %v", r.ID, err)
 				return
 			}
-			ctrlWriteMu.Unlock()
+			session.ctrlWriteMu.Unlock()
 
 			// 等待内网端响应工作通道 (最长等待 10 秒)
 			select {
@@ -277,9 +404,9 @@ func runBridgeServer(ctx context.Context, r v2.TunnelRule) {
 				}
 				pipeConns(visitor, workConn)
 			case <-time.After(10 * time.Second):
-				pendingLock.Lock()
-				delete(pendingWork, connID)
-				pendingLock.Unlock()
+				session.pendingLock.Lock()
+				delete(session.pendingWork, connID)
+				session.pendingLock.Unlock()
 				visitor.Close()
 				log.Printf("[ReverseBridge] Work connection timeout for connID: %s", connID)
 			case <-ctx.Done():
@@ -339,6 +466,12 @@ func runTargetClient(ctx context.Context, r v2.TunnelRule) {
 			_ = tc.SetKeepAlivePeriod(15 * time.Second)
 		}
 
+		// 退出清理保障：当上下文取消时即刻断开长连接以结束阻塞
+		go func(c net.Conn) {
+			<-ctx.Done()
+			_ = c.Close()
+		}(conn)
+
 		// 2. 发送认证消息
 		authMsg := fmt.Sprintf("AUTH %s %s\n", r.TunnelSecret, r.ID)
 		_, err = conn.Write([]byte(authMsg))
@@ -363,8 +496,13 @@ func runTargetClient(ctx context.Context, r v2.TunnelRule) {
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
-				log.Printf("[ReverseTarget] Control connection disconnected for %s: %v", r.ID, err)
-				conn.Close()
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					log.Printf("[ReverseTarget] Control connection disconnected for %s: %v", r.ID, err)
+					conn.Close()
+				}
 				break
 			}
 
