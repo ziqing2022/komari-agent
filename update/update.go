@@ -211,6 +211,74 @@ func selectLatestStableRelease(releases []githubRelease, currentVersion semver.V
 	return latest, found
 }
 
+func selectReleaseByTargetVersion(releases []githubRelease, targetVersion string, assetName string) (snapshotReleaseCandidate, bool) {
+	targetTrimmed := strings.TrimSpace(targetVersion)
+	if targetTrimmed == "" || strings.EqualFold(targetTrimmed, "latest") {
+		var latest snapshotReleaseCandidate
+		found := false
+		var bestVer semver.Version
+
+		for _, release := range releases {
+			if release.Draft || release.Prerelease || strings.HasPrefix(release.TagName, snapshotVersionPrefix) {
+				continue
+			}
+
+			ver, err := parseVersion(release.TagName)
+			if err != nil {
+				continue
+			}
+
+			asset, ok := findReleaseAsset(release, assetName)
+			if !ok {
+				continue
+			}
+
+			candidate := snapshotReleaseCandidate{
+				TagName:     release.TagName,
+				Name:        release.Name,
+				Body:        release.Body,
+				HTMLURL:     release.HTMLURL,
+				PublishedAt: release.PublishedAt,
+				Asset:       asset,
+			}
+
+			if !found || ver.GT(bestVer) || (ver.Equals(bestVer) && candidate.PublishedAt.After(latest.PublishedAt)) {
+				latest = candidate
+				bestVer = ver
+				found = true
+			}
+		}
+
+		return latest, found
+	}
+
+	targetClean := strings.TrimPrefix(strings.TrimPrefix(targetTrimmed, "v"), "V")
+	for _, release := range releases {
+		if release.Draft {
+			continue
+		}
+
+		tagClean := strings.TrimPrefix(strings.TrimPrefix(release.TagName, "v"), "V")
+		if strings.EqualFold(tagClean, targetClean) || strings.EqualFold(release.TagName, targetTrimmed) {
+			asset, ok := findReleaseAsset(release, assetName)
+			if !ok {
+				continue
+			}
+
+			return snapshotReleaseCandidate{
+				TagName:     release.TagName,
+				Name:        release.Name,
+				Body:        release.Body,
+				HTMLURL:     release.HTMLURL,
+				PublishedAt: release.PublishedAt,
+				Asset:       asset,
+			}, true
+		}
+	}
+
+	return snapshotReleaseCandidate{}, false
+}
+
 func snapshotNeedsUpdate(currentVersion string, latest snapshotReleaseCandidate) bool {
 	return currentVersion != latest.TagName
 }
@@ -443,4 +511,59 @@ func CheckAndUpdate() error {
 	}
 
 	return checkAndUpdateStable(currentSemVer, updater, listGitHubReleases)
+}
+
+// SwitchToVersion 切换 Agent 到指定的版本（如 "latest", "1.2.12", "v1.2.12" 等）
+func SwitchToVersion(targetVersion string) error {
+	log.Printf("[Update] Switching agent version to %q...", targetVersion)
+
+	if isContainerAgent() {
+		log.Println("[Update] Agent is running in a container; binary self-switch is disabled.")
+		return nil
+	}
+
+	http.DefaultClient = dnsresolver.GetHTTPClient(60 * time.Second)
+	updater, err := selfupdate.NewUpdater(selfupdate.Config{})
+	if err != nil {
+		return fmt.Errorf("failed to create updater: %v", err)
+	}
+
+	owner, repo, err := splitRepoSlug(Repo)
+	if err != nil {
+		return err
+	}
+
+	releases, err := listGitHubReleases(owner, repo)
+	if err != nil {
+		return fmt.Errorf("failed to list GitHub releases: %w", err)
+	}
+
+	effArch := detectEffectiveArch(runtime.GOOS, runtime.GOARCH)
+	assetName := expectedAssetName(runtime.GOOS, effArch)
+
+	candidate, found := selectReleaseByTargetVersion(releases, targetVersion, assetName)
+	if !found {
+		return fmt.Errorf("no matching release or asset %s found for version %q", assetName, targetVersion)
+	}
+
+	curClean := strings.TrimPrefix(strings.TrimPrefix(CurrentVersion, "v"), "V")
+	candClean := strings.TrimPrefix(strings.TrimPrefix(candidate.TagName, "v"), "V")
+	if curClean == candClean && !strings.EqualFold(targetVersion, "force") {
+		log.Printf("[Update] Agent is already running version %s (target: %s), no switch needed", CurrentVersion, targetVersion)
+		return nil
+	}
+
+	cmdPath, err := currentExecutablePath()
+	if err != nil {
+		return fmt.Errorf("failed to resolve current executable path: %w", err)
+	}
+
+	log.Printf("[Update] Will switch %s from %s to %s (%s)\n", cmdPath, CurrentVersion, candidate.TagName, assetName)
+	rel := selfUpdateReleaseFromSnapshot(owner, repo, candidate)
+	if err := updater.UpdateTo(rel, cmdPath); err != nil {
+		return fmt.Errorf("failed to switch to version %s: %w", candidate.TagName, err)
+	}
+
+	log.Printf("[Update] Successfully switched to version %s\n", candidate.TagName)
+	return ErrRestartRequired
 }

@@ -12,6 +12,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 	v2 "github.com/ziqing2022/komari-agent/protocol/v2"
 	"github.com/ziqing2022/komari-agent/terminal"
 	"github.com/ziqing2022/komari-agent/tunnel"
+	"github.com/ziqing2022/komari-agent/update"
 	"github.com/ziqing2022/komari-agent/utils"
 	"github.com/ziqing2022/komari-agent/ws"
 )
@@ -431,6 +433,22 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			return true
 		} else {
 			log.Printf("bad v2 tunnel params: %v", err)
+		}
+	case v2.MethodAgentSwitchVersion:
+		var p v2.SwitchVersionParams
+		if err := v2.BindParams(params, &p); err == nil {
+			go func() {
+				log.Printf("[Agent] Received switch version command to target: %q", p.Version)
+				if err := update.SwitchToVersion(p.Version); errors.Is(err, update.ErrRestartRequired) {
+					log.Println("[Agent] Version switched successfully. Restarting agent...")
+					os.Exit(0)
+				} else if err != nil {
+					log.Printf("[Agent] Failed to switch version: %v", err)
+				}
+			}()
+			return true
+		} else {
+			log.Printf("bad v2 switch version params: %v", err)
 		}
 	default:
 		log.Printf("unknown v2 event method %s", method)

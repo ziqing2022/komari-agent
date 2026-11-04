@@ -18,10 +18,15 @@ const (
 	MethodAgentTerminal   = "agent.terminal.request"
 	MethodAgentPull       = "agent.pull"
 	MethodAgentFile       = "agent.file"
-	MethodAgentFileResult = "agent.file.result"
+	MethodAgentFileResult   = "agent.file.result"
+	MethodAgentSwitchVersion = "agent.switchVersion"
 	MethodAgentTunnel       = "agent.tunnel"
 	MethodAgentTunnelResult = "agent.tunnel.result"
 )
+
+type SwitchVersionParams struct {
+	Version string `json:"version"`
+}
 
 type TunnelRule struct {
 	ID               string `json:"id"`

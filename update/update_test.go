@@ -239,6 +239,50 @@ func TestSelectLatestStableRelease(t *testing.T) {
 	}
 }
 
+func TestSelectReleaseByTargetVersion(t *testing.T) {
+	assetName := "komari-agent-linux-amd64"
+	base := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+
+	releases := []githubRelease{
+		testRelease("v1.2.9", false, false, base, assetName),
+		testRelease("v1.2.10", false, false, base.Add(time.Hour), assetName),
+		testRelease("v1.2.11", false, false, base.Add(2*time.Hour), assetName),
+		testRelease("v1.2.12", false, false, base.Add(3*time.Hour), "komari-agent-linux-arm64"), // no amd64
+		testRelease("v1.2.13", false, false, base.Add(4*time.Hour), assetName),
+		testRelease("v1.2.14-beta", true, false, base.Add(5*time.Hour), assetName),
+	}
+
+	// 1. "latest" should pick v1.2.13 (highest stable with matching asset)
+	got, ok := selectReleaseByTargetVersion(releases, "latest", assetName)
+	if !ok || got.TagName != "v1.2.13" {
+		t.Fatalf("selectReleaseByTargetVersion(latest) = %v, %v, want v1.2.13", got.TagName, ok)
+	}
+
+	// 2. Specific version with 'v' prefix
+	got, ok = selectReleaseByTargetVersion(releases, "v1.2.11", assetName)
+	if !ok || got.TagName != "v1.2.11" {
+		t.Fatalf("selectReleaseByTargetVersion(v1.2.11) = %v, %v, want v1.2.11", got.TagName, ok)
+	}
+
+	// 3. Specific version without 'v' prefix
+	got, ok = selectReleaseByTargetVersion(releases, "1.2.10", assetName)
+	if !ok || got.TagName != "v1.2.10" {
+		t.Fatalf("selectReleaseByTargetVersion(1.2.10) = %v, %v, want v1.2.10", got.TagName, ok)
+	}
+
+	// 4. Missing asset for arch
+	_, ok = selectReleaseByTargetVersion(releases, "1.2.12", assetName)
+	if ok {
+		t.Fatalf("selectReleaseByTargetVersion(1.2.12) should fail due to missing assetName")
+	}
+
+	// 5. Non-existent version
+	_, ok = selectReleaseByTargetVersion(releases, "1.0.0", assetName)
+	if ok {
+		t.Fatalf("selectReleaseByTargetVersion(1.0.0) should fail for non-existent release")
+	}
+}
+
 func TestDetectEffectiveArch(t *testing.T) {
 	if got := detectEffectiveArch("darwin", "arm64"); got != "arm64" {
 		t.Errorf("detectEffectiveArch(darwin, arm64) = %q, want arm64", got)
