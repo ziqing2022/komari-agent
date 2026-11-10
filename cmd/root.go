@@ -50,6 +50,10 @@ var RootCmd = &cobra.Command{
 				if _, err := os.Stat(exeConfig); err == nil {
 					flags.ConfigFile = exeConfig
 				}
+			} else if _, err := os.Stat("/etc/komari-agent/config.json"); err == nil {
+				flags.ConfigFile = "/etc/komari-agent/config.json"
+			} else if _, err := os.Stat("/opt/komari-agent/config.json"); err == nil {
+				flags.ConfigFile = "/opt/komari-agent/config.json"
 			} else if _, err := os.Stat("/etc/komari/config.json"); err == nil {
 				flags.ConfigFile = "/etc/komari/config.json"
 			} else if _, err := os.Stat("/opt/komari/config.json"); err == nil {
@@ -69,6 +73,9 @@ var RootCmd = &cobra.Command{
 		if flags.PreferIPVersion != "" && flags.PreferIPVersion != "4" && flags.PreferIPVersion != "6" {
 			return fmt.Errorf("invalid --prefer-ip-version value %q: expected 4 or 6", flags.PreferIPVersion)
 		}
+		// 初始化多域名与 IP 容灾池
+		server.Failover.InitEndpoints(flags.Endpoint, flags.Endpoints)
+
 		// 捕获中止信号，优雅退出
 		stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()

@@ -78,7 +78,7 @@ func tryUploadData(data map[string]interface{}) error {
 }
 
 func tryUploadDataWithProtocol(data map[string]interface{}) error {
-	endpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/v2/rpc?token=" + flags.Token
+	endpoint := strings.TrimSuffix(Failover.GetActiveEndpoint(), "/") + "/api/clients/v2/rpc?token=" + flags.Token
 	payload := v2.BuildBasicInfoPayload(data)
 	body := payload
 	compressed := false

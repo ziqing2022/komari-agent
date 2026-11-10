@@ -61,7 +61,7 @@ func buildFileTransferURL(args map[string]interface{}) (string, error) {
 	if id == "" || token == "" {
 		return "", errors.New("transfer_id and transfer_token are required")
 	}
-	base, err := url.Parse(strings.TrimSpace(pkg_flags.GlobalConfig.Endpoint))
+	base, err := url.Parse(strings.TrimSpace(Failover.GetActiveEndpoint()))
 	if err != nil || base.Scheme == "" || base.Host == "" {
 		return "", errors.New("invalid agent endpoint")
 	}

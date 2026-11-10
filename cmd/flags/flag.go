@@ -5,9 +5,10 @@ type Config struct {
 	DisableAutoUpdate   bool    `json:"disable_auto_update" env:"AGENT_DISABLE_AUTO_UPDATE"`       // 禁用自动更新
 	DisableWebSsh       bool    `json:"disable_web_ssh" env:"AGENT_DISABLE_WEB_SSH"`               // 禁用远程控制（web ssh 和 rce）
 	MemoryModeAvailable bool    `json:"memory_mode_available" env:"AGENT_MEMORY_MODE_AVAILABLE"`   // [deprecated] 已弃用，请使用 MemoryIncludeCache
-	Token               string  `json:"token" env:"AGENT_TOKEN"`                                   // Token
-	Endpoint            string  `json:"endpoint" env:"AGENT_ENDPOINT"`                             // 面板地址
-	Interval            float64 `json:"interval" env:"AGENT_INTERVAL"`                             // 数据采集间隔，单位秒
+	Token               string   `json:"token" env:"AGENT_TOKEN"`                                   // Token
+	Endpoint            string   `json:"endpoint" env:"AGENT_ENDPOINT"`                             // 面板主地址
+	Endpoints           []string `json:"endpoints" env:"AGENT_ENDPOINTS"`                           // 面板多地址容灾池（主备切换）
+	Interval            float64  `json:"interval" env:"AGENT_INTERVAL"`                             // 数据采集间隔，单位秒
 	IgnoreUnsafeCert    bool    `json:"ignore_unsafe_cert" env:"AGENT_IGNORE_UNSAFE_CERT"`         // 忽略不安全的证书
 	MaxRetries          int     `json:"max_retries" env:"AGENT_MAX_RETRIES"`                       // 最大重试次数
 	ReconnectInterval   int     `json:"reconnect_interval" env:"AGENT_RECONNECT_INTERVAL"`         // 重连间隔，单位秒

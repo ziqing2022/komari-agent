@@ -74,16 +74,21 @@ func EstablishWebSocketConnection() {
 					websocketEndpoint := buildWebSocketEndpoint()
 					conn, err = connectWebSocket(websocketEndpoint)
 					if err == nil {
-						log.Println("WebSocket connected using v2 protocol")
+						Failover.OnSuccess(Failover.GetActiveEndpoint())
+						log.Println("WebSocket connected using v2 protocol to", Failover.GetActiveEndpoint())
 						done := make(chan struct{})
 						readDone = done
 						go handleWebSocketMessages(conn, done)
 						break
 					} else {
-						log.Println("Failed to connect to WebSocket:", safeError(err))
+						isAuth, sleepDur := Failover.OnFailure(err)
+						if !isAuth {
+							log.Println("Failed to connect to WebSocket:", safeError(err))
+						}
+						retry++
+						time.Sleep(sleepDur)
+						continue
 					}
-					retry++
-					time.Sleep(time.Duration(flags.ReconnectInterval) * time.Second)
 				}
 
 				if retry > flags.MaxRetries {
@@ -135,14 +140,7 @@ func EstablishWebSocketConnection() {
 }
 
 func buildWebSocketEndpoint() string {
-	websocketEndpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/v2/rpc?token=" + flags.Token
-	websocketEndpoint = "ws" + strings.TrimPrefix(websocketEndpoint, "http")
-	if convertedEndpoint, err := utils.ConvertIDNToASCII(websocketEndpoint); err == nil {
-		return convertedEndpoint
-	} else {
-		log.Printf("Warning: Failed to convert WebSocket IDN to ASCII: %v", err)
-	}
-	return websocketEndpoint
+	return Failover.GetActiveWebSocketEndpoint()
 }
 
 func runPostFallback(websocketEndpoint string, interval float64) (*ws.SafeConn, error) {
@@ -216,7 +214,7 @@ func postV2Request(payload []byte) (*v2.Response, error) {
 }
 
 func postV2RequestContext(ctx context.Context, payload []byte) (*v2.Response, error) {
-	endpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/v2/rpc?token=" + flags.Token
+	endpoint := strings.TrimSuffix(Failover.GetActiveEndpoint(), "/") + "/api/clients/v2/rpc?token=" + flags.Token
 	body := payload
 	compressed := false
 	if !flags.DisableCompression {
@@ -403,10 +401,18 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			RequestID string `json:"request_id"`
 		}
 		if err := v2.BindParams(params, &p); err == nil {
-			go establishTerminalConnection(flags.Token, p.RequestID, flags.Endpoint)
+			go establishTerminalConnection(flags.Token, p.RequestID, Failover.GetActiveEndpoint())
 			return true
 		} else {
 			log.Printf("bad v2 terminal params: %v", err)
+		}
+	case v2.MethodAgentEndpoints:
+		var p v2.EndpointsParams
+		if err := v2.BindParams(params, &p); err == nil && len(p.Endpoints) > 0 {
+			Failover.SyncEndpoints(p.Endpoints)
+			return true
+		} else {
+			log.Printf("bad v2 endpoints params: %v", err)
 		}
 	case v2.MethodAgentMessage, v2.MethodAgentEvent:
 		log.Printf("received v2 %s: %+v", method, params)

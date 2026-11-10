@@ -22,7 +22,12 @@ const (
 	MethodAgentSwitchVersion = "agent.switchVersion"
 	MethodAgentTunnel       = "agent.tunnel"
 	MethodAgentTunnelResult = "agent.tunnel.result"
+	MethodAgentEndpoints    = "agent.endpoints"
 )
+
+type EndpointsParams struct {
+	Endpoints []string `json:"endpoints"`
+}
 
 type SwitchVersionParams struct {
 	Version string `json:"version"`
@@ -40,15 +45,18 @@ type TunnelRule struct {
 	AutoOpenFirewall bool   `json:"auto_open_firewall"`
 	Enabled          bool   `json:"enabled"`
 
-	// 高级协议专用字段 (VLESS / SOCKS5 / Shadowsocks / Trojan / Hysteria2)
-	UUID       string `json:"uuid,omitempty"`
-	Password   string `json:"password,omitempty"`
-	Username   string `json:"username,omitempty"`
-	Method     string `json:"method,omitempty"`
-	SNI        string `json:"sni,omitempty"`
-	PrivateKey string `json:"private_key,omitempty"`
-	PublicKey  string `json:"public_key,omitempty"`
-	ShortID    string `json:"short_id,omitempty"`
+	// 高级协议专用字段 (VLESS / SOCKS5 / Shadowsocks / Trojan / Hysteria2 / TUIC)
+	UUID         string `json:"uuid,omitempty"`
+	Password     string `json:"password,omitempty"`
+	Username     string `json:"username,omitempty"`
+	Method       string `json:"method,omitempty"`
+	SNI          string `json:"sni,omitempty"`
+	PrivateKey   string `json:"private_key,omitempty"`
+	PublicKey    string `json:"public_key,omitempty"`
+	ShortID      string `json:"short_id,omitempty"`
+	ObfsPassword string `json:"obfs_password,omitempty"`
+	ObfsType     string `json:"obfs_type,omitempty"`
+	Ports        string `json:"ports,omitempty"`
 
 	// 跨节点反向穿透专用字段
 	IsReverse        bool   `json:"is_reverse,omitempty"`
