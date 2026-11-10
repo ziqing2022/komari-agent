@@ -9,10 +9,10 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release tag to build and attach assets to (e.g. v1.2.10)'
+        description: 'Release tag to build and attach assets to (e.g. v1.2.13)'
         required: false
         type: string
-        default: 'v1.2.10'
+        default: 'v1.2.13'
 
 permissions:
   contents: write
@@ -38,7 +38,7 @@ jobs:
           elif [ -n "${{ inputs.tag_name }}" ]; then
             TAG="${{ inputs.tag_name }}"
           else
-            TAG=$(gh release view --repo ${{ github.repository }} --json tagName -q .tagName 2>/dev/null || echo "v1.2.10")
+            TAG=$(gh release view --repo ${{ github.repository }} --json tagName -q .tagName 2>/dev/null || echo "v1.2.13")
           fi
 
           echo "Target tag: $TAG"

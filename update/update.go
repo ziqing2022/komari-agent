@@ -79,7 +79,14 @@ type containerCheck func() bool
 func parseVersion(ver string) (semver.Version, error) {
 	ver = strings.TrimPrefix(ver, "v")
 	ver = strings.TrimPrefix(ver, "V")
-	return semver.ParseTolerant(ver)
+	v, err := semver.ParseTolerant(ver)
+	if err != nil {
+		// 若为 Git Commit Hash 或非规范版本，平滑降级为基线版本 1.2.13，防止阻断运行
+		if defaultV, dErr := semver.ParseTolerant("1.2.13"); dErr == nil {
+			return defaultV, nil
+		}
+	}
+	return v, err
 }
 
 // needUpdate 判断是否需要更新

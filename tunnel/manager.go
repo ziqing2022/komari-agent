@@ -476,49 +476,47 @@ func ensureSelfSignedCert() (string, string) {
 }
 
 func syncFirewallPorts(oldRules, newRules []v2.TunnelRule) {
-	oldMap := make(map[int]v2.TunnelRule)
+	oldMap := make(map[int]string) // port -> proto
 	for _, r := range oldRules {
 		if r.Enabled && r.AutoOpenFirewall {
 			if r.IsReverse && strings.ToLower(r.Role) == "target" {
 				continue // 内网端无需入站端口
 			}
-			oldMap[r.ListenPort] = r
+			oldMap[r.ListenPort] = getEffectiveProtocol(r)
 			if r.IsReverse && strings.ToLower(r.Role) == "bridge" && r.ControlPort > 0 {
-				oldMap[r.ControlPort] = r
+				oldMap[r.ControlPort] = "tcp"
 			}
 		}
 	}
 
-	newMap := make(map[int]v2.TunnelRule)
+	newMap := make(map[int]string) // port -> proto
 	for _, r := range newRules {
 		if r.Enabled && r.AutoOpenFirewall {
 			if r.IsReverse && strings.ToLower(r.Role) == "target" {
 				continue // 内网端无需入站端口
 			}
-			newMap[r.ListenPort] = r
+			newMap[r.ListenPort] = getEffectiveProtocol(r)
 			if r.IsReverse && strings.ToLower(r.Role) == "bridge" {
 				ctrlPort := r.ControlPort
 				if ctrlPort <= 0 {
 					ctrlPort = 27888
 				}
-				newMap[ctrlPort] = r
+				newMap[ctrlPort] = "tcp"
 			}
 		}
 	}
 
 	// 回收不再需要的端口
-	for port, r := range oldMap {
+	for port, proto := range oldMap {
 		if _, exists := newMap[port]; !exists {
-			proto := getEffectiveProtocol(r)
 			log.Printf("[Firewall] Closing port %d (%s)...", port, proto)
 			_ = ClosePort(port, proto)
 		}
 	}
 
 	// 开放新增的端口
-	for port, r := range newMap {
+	for port, proto := range newMap {
 		if _, exists := oldMap[port]; !exists {
-			proto := getEffectiveProtocol(r)
 			log.Printf("[Firewall] Opening port %d (%s)...", port, proto)
 			_ = OpenPort(port, proto)
 		}

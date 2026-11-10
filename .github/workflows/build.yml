@@ -44,7 +44,7 @@ jobs:
           GOARCH: ${{ matrix.build_arch || matrix.goarch }}
           GOARM: ${{ matrix.goarm || '' }}
           CGO_ENABLED: 0
-          VERSION: ${{ github.sha }}
+          VERSION: "v1.2.13"
         run: |
           BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then
