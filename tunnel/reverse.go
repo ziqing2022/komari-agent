@@ -501,6 +501,7 @@ func (s *bridgeRuleSession) runBridgeUDPVisitorLoop(ctx context.Context, udpList
 			err := writeUDPPacket(work, remoteAddr.String(), buf[:n])
 			s.udpWriteMu.Unlock()
 			if err != nil {
+				log.Printf("[ReverseBridge-UDP] Failed to forward UDP packet from %s to target for %s: %v", remoteAddr, s.rule.ID, err)
 				s.udpWorkLock.Lock()
 				if s.udpWorkConn == work {
 					_ = work.Close()
@@ -508,6 +509,8 @@ func (s *bridgeRuleSession) runBridgeUDPVisitorLoop(ctx context.Context, udpList
 				}
 				s.udpWorkLock.Unlock()
 			}
+		} else {
+			log.Printf("[ReverseBridge-UDP] Dropped %d bytes from %s for %s: Target work tunnel not connected", n, remoteAddr, s.rule.ID)
 		}
 	}
 }
@@ -830,15 +833,22 @@ func handleTargetUDPLoop(ctx context.Context, bridgeConn net.Conn, localUDPAddr 
 			}
 			sessions[remoteAddrStr] = sess
 
+			log.Printf("[ReverseTarget-UDP] Received visitor %s -> Forwarding to local %v (first packet %d bytes)", remoteAddrStr, localUDPAddr, len(data))
+
 			// 异步读取本地服务的 UDP 响应并送回公网 Bridge
 			go func(s *targetUDPSession, rAddr string) {
 				buf := make([]byte, 65535)
+				firstResp := true
 				for {
 					n, err := s.localConn.Read(buf)
 					if err != nil {
 						return
 					}
 					s.lastActive = time.Now()
+					if firstResp {
+						firstResp = false
+						log.Printf("[ReverseTarget-UDP] Local service responded %d bytes for visitor %s -> Returning to bridge", n, rAddr)
+					}
 
 					writeLock.Lock()
 					wErr := writeUDPPacket(bridgeConn, rAddr, buf[:n])

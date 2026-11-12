@@ -229,7 +229,7 @@ func generateSingBoxConfig(rules []v2.TunnelRule) *SingBoxConfig {
 			if sni == "" {
 				sni = "gateway.icloud.com"
 			}
-			certPath, keyPath := ensureSelfSignedCert()
+			certPath, keyPath := ensureSelfSignedCert(sni)
 			inbound := map[string]any{
 				"type":        "tuic",
 				"tag":         tag,
@@ -291,7 +291,7 @@ func generateSingBoxConfig(rules []v2.TunnelRule) *SingBoxConfig {
 			if sni == "" {
 				sni = "gateway.icloud.com"
 			}
-			certPath, keyPath := ensureSelfSignedCert()
+			certPath, keyPath := ensureSelfSignedCert(sni)
 			inbound := map[string]any{
 				"type":        "trojan",
 				"tag":         tag,
@@ -315,7 +315,7 @@ func generateSingBoxConfig(rules []v2.TunnelRule) *SingBoxConfig {
 			if sni == "" {
 				sni = "gateway.icloud.com"
 			}
-			certPath, keyPath := ensureSelfSignedCert()
+			certPath, keyPath := ensureSelfSignedCert(sni)
 			inbound := map[string]any{
 				"type":                    "hysteria2",
 				"tag":                     tag,
@@ -415,15 +415,61 @@ func checkPortAvailable(host string, port int, proto string) bool {
 	return true
 }
 
-func ensureSelfSignedCert() (string, string) {
+func ensureSelfSignedCert(extraSNIs ...string) (string, string) {
 	certDir := filepath.Join(getRuntimeDir(), "certs")
 	_ = os.MkdirAll(certDir, 0755)
 	certPath := filepath.Join(certDir, "server.crt")
 	keyPath := filepath.Join(certDir, "server.key")
 
-	if _, err := os.Stat(certPath); err == nil {
+	// 预先汇总所需的全部 SAN 域名
+	dnsSet := map[string]bool{
+		"localhost":          true,
+		"komari.proxy":       true,
+		"gateway.icloud.com": true,
+		"www.apple.com":      true,
+		"bing.com":           true,
+		"*.apple.com":        true,
+		"*.icloud.com":       true,
+		"*.microsoft.com":    true,
+		"*.azure.com":        true,
+		"*.cloudflare.com":   true,
+		"*.amazon.com":       true,
+	}
+	for _, s := range extraSNIs {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s != "" {
+			dnsSet[s] = true
+			parts := strings.Split(s, ".")
+			if len(parts) >= 2 {
+				dnsSet["*."+strings.Join(parts[len(parts)-2:], ".")] = true
+			}
+		}
+	}
+
+	// 检查现有证书是否存在且包含所请求的全部 SNI
+	if certBytes, err := os.ReadFile(certPath); err == nil {
 		if _, err := os.Stat(keyPath); err == nil {
-			return certPath, keyPath
+			block, _ := pem.Decode(certBytes)
+			if block != nil {
+				if parsedCert, err := x509.ParseCertificate(block.Bytes); err == nil {
+					if time.Now().Before(parsedCert.NotAfter) {
+						existingNames := make(map[string]bool)
+						for _, name := range parsedCert.DNSNames {
+							existingNames[strings.ToLower(name)] = true
+						}
+						allCovered := true
+						for requiredSNI := range dnsSet {
+							if !existingNames[requiredSNI] {
+								allCovered = false
+								break
+							}
+						}
+						if allCovered {
+							return certPath, keyPath
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -436,11 +482,21 @@ func ensureSelfSignedCert() (string, string) {
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serialNumber, _ := rand.Int(rand.Reader, serialNumberLimit)
 
+	var dnsNames []string
+	for name := range dnsSet {
+		dnsNames = append(dnsNames, name)
+	}
+
+	commonName := "gateway.icloud.com"
+	if len(extraSNIs) > 0 && strings.TrimSpace(extraSNIs[0]) != "" {
+		commonName = strings.TrimSpace(extraSNIs[0])
+	}
+
 	template := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			Organization: []string{"Komari Agent"},
-			CommonName:   "komari.proxy",
+			CommonName:   commonName,
 		},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour), // 10 years
@@ -448,7 +504,7 @@ func ensureSelfSignedCert() (string, string) {
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
-		DNSNames:              []string{"localhost", "komari.proxy", "gateway.icloud.com", "www.apple.com", "bing.com"},
+		DNSNames:              dnsNames,
 	}
 
 	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
