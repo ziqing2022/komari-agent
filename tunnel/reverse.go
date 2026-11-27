@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -377,6 +378,22 @@ func (hub *bridgeControlHub) handleInboundControlConn(c net.Conn) {
 		} else {
 			_ = c.Close()
 		}
+	} else if cmd == "WORK_ERR" && len(parts) >= 4 {
+		// 内网端连接本地目标服务失败，立即唤醒并关闭访客等待通道
+		connID := parts[3]
+		session.pendingLock.Lock()
+		ch, ok := session.pendingWork[connID]
+		if ok {
+			delete(session.pendingWork, connID)
+		}
+		session.pendingLock.Unlock()
+		if ok && ch != nil {
+			select {
+			case ch <- nil:
+			default:
+			}
+		}
+		_ = c.Close()
 	} else {
 		_ = c.Close()
 	}
@@ -609,8 +626,8 @@ func runTargetClient(ctx context.Context, r v2.TunnelRule) {
 		targetPort = r.ListenPort
 	}
 
-	remoteAddr := fmt.Sprintf("%s:%d", bridgeHost, controlPort)
-	localAddr := fmt.Sprintf("%s:%d", targetHost, targetPort)
+	remoteAddr := net.JoinHostPort(strings.Trim(bridgeHost, "[]"), strconv.Itoa(controlPort))
+	localAddr := net.JoinHostPort(strings.Trim(targetHost, "[]"), strconv.Itoa(targetPort))
 	proto := getEffectiveProtocol(r)
 
 	log.Printf("[ReverseTarget] Starting reverse target for %s (%s): Bridge=%s, LocalTarget=%s", r.ID, proto, remoteAddr, localAddr)
@@ -878,6 +895,10 @@ func handleWorkConnection(ctx context.Context, remoteAddr, localAddr, secret, ru
 	localConn, err := net.DialTimeout("tcp", localAddr, 5*time.Second)
 	if err != nil {
 		log.Printf("[ReverseTarget] Failed to dial local target service %s: %v", localAddr, err)
+		if errConn, dErr := net.DialTimeout("tcp", remoteAddr, 3*time.Second); dErr == nil {
+			_, _ = errConn.Write([]byte(fmt.Sprintf("WORK_ERR %s %s %s\n", secret, ruleID, connID)))
+			_ = errConn.Close()
+		}
 		return
 	}
 	if tc, ok := localConn.(*net.TCPConn); ok {

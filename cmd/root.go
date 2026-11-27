@@ -40,25 +40,55 @@ var RootCmd = &cobra.Command{
 			ShowToast()
 			return nil
 		}
-		loadFromEnv() // 从环境变量加载配置，覆盖解析
-		if flags.ConfigFile == "" {
-			// 自动探测当前工作目录、可执行文件所在目录以及标准系统目录中的 config.json
-			if _, err := os.Stat("config.json"); err == nil {
-				flags.ConfigFile = "config.json"
-			} else if exePath, err := os.Executable(); err == nil {
-				exeConfig := filepath.Join(filepath.Dir(exePath), "config.json")
-				if _, err := os.Stat(exeConfig); err == nil {
-					flags.ConfigFile = exeConfig
-				}
-			} else if _, err := os.Stat("/etc/komari-agent/config.json"); err == nil {
-				flags.ConfigFile = "/etc/komari-agent/config.json"
-			} else if _, err := os.Stat("/opt/komari-agent/config.json"); err == nil {
-				flags.ConfigFile = "/opt/komari-agent/config.json"
-			} else if _, err := os.Stat("/etc/komari/config.json"); err == nil {
-				flags.ConfigFile = "/etc/komari/config.json"
-			} else if _, err := os.Stat("/opt/komari/config.json"); err == nil {
-				flags.ConfigFile = "/opt/komari/config.json"
+		// 1. 记录通过命令行显式覆盖的配置项，防止后续加载配置文件将其覆盖
+		var cliOverrides []func(*pkg_flags.Config)
+		recordStrOverride := func(flagName string, dst func(*pkg_flags.Config, string), val string) {
+			if cmd.Flags().Changed(flagName) {
+				cliOverrides = append(cliOverrides, func(c *pkg_flags.Config) { dst(c, val) })
 			}
+		}
+		recordBoolOverride := func(flagName string, dst func(*pkg_flags.Config, bool), val bool) {
+			if cmd.Flags().Changed(flagName) {
+				cliOverrides = append(cliOverrides, func(c *pkg_flags.Config) { dst(c, val) })
+			}
+		}
+		recordIntOverride := func(flagName string, dst func(*pkg_flags.Config, int), val int) {
+			if cmd.Flags().Changed(flagName) {
+				cliOverrides = append(cliOverrides, func(c *pkg_flags.Config) { dst(c, val) })
+			}
+		}
+		recordFloatOverride := func(flagName string, dst func(*pkg_flags.Config, float64), val float64) {
+			if cmd.Flags().Changed(flagName) {
+				cliOverrides = append(cliOverrides, func(c *pkg_flags.Config) { dst(c, val) })
+			}
+		}
+
+		recordStrOverride("token", func(c *pkg_flags.Config, v string) { c.Token = v }, flags.Token)
+		recordStrOverride("endpoint", func(c *pkg_flags.Config, v string) { c.Endpoint = v }, flags.Endpoint)
+		recordStrOverride("auto-discovery", func(c *pkg_flags.Config, v string) { c.AutoDiscoveryKey = v }, flags.AutoDiscoveryKey)
+		recordBoolOverride("disable-auto-update", func(c *pkg_flags.Config, v bool) { c.DisableAutoUpdate = v }, flags.DisableAutoUpdate)
+		recordBoolOverride("disable-web-ssh", func(c *pkg_flags.Config, v bool) { c.DisableWebSsh = v }, flags.DisableWebSsh)
+		recordFloatOverride("interval", func(c *pkg_flags.Config, v float64) { c.Interval = v }, flags.Interval)
+		recordBoolOverride("ignore-unsafe-cert", func(c *pkg_flags.Config, v bool) { c.IgnoreUnsafeCert = v }, flags.IgnoreUnsafeCert)
+		recordIntOverride("max-retries", func(c *pkg_flags.Config, v int) { c.MaxRetries = v }, flags.MaxRetries)
+		recordIntOverride("reconnect-interval", func(c *pkg_flags.Config, v int) { c.ReconnectInterval = v }, flags.ReconnectInterval)
+		recordIntOverride("info-report-interval", func(c *pkg_flags.Config, v int) { c.InfoReportInterval = v }, flags.InfoReportInterval)
+		recordStrOverride("include-nics", func(c *pkg_flags.Config, v string) { c.IncludeNics = v }, flags.IncludeNics)
+		recordStrOverride("exclude-nics", func(c *pkg_flags.Config, v string) { c.ExcludeNics = v }, flags.ExcludeNics)
+		recordStrOverride("include-mountpoint", func(c *pkg_flags.Config, v string) { c.IncludeMountpoints = v }, flags.IncludeMountpoints)
+		recordIntOverride("month-rotate", func(c *pkg_flags.Config, v int) { c.MonthRotate = v }, flags.MonthRotate)
+		recordBoolOverride("memory-include-cache", func(c *pkg_flags.Config, v bool) { c.MemoryIncludeCache = v }, flags.MemoryIncludeCache)
+		recordBoolOverride("memory-exclude-bcf", func(c *pkg_flags.Config, v bool) { c.MemoryReportRawUsed = v }, flags.MemoryReportRawUsed)
+		recordStrOverride("custom-dns", func(c *pkg_flags.Config, v string) { c.CustomDNS = v }, flags.CustomDNS)
+		recordBoolOverride("gpu", func(c *pkg_flags.Config, v bool) { c.EnableGPU = v }, flags.EnableGPU)
+		recordStrOverride("custom-ipv4", func(c *pkg_flags.Config, v string) { c.CustomIpv4 = v }, flags.CustomIpv4)
+		recordStrOverride("custom-ipv6", func(c *pkg_flags.Config, v string) { c.CustomIpv6 = v }, flags.CustomIpv6)
+		recordBoolOverride("get-ip-addr-from-nic", func(c *pkg_flags.Config, v bool) { c.GetIpAddrFromNic = v }, flags.GetIpAddrFromNic)
+		recordBoolOverride("disable-compression", func(c *pkg_flags.Config, v bool) { c.DisableCompression = v }, flags.DisableCompression)
+		recordStrOverride("prefer-ip-version", func(c *pkg_flags.Config, v string) { c.PreferIPVersion = v }, flags.PreferIPVersion)
+
+		if flags.ConfigFile == "" {
+			flags.ConfigFile = findDefaultConfigFile()
 		}
 		if flags.ConfigFile != "" {
 			bytes, err := os.ReadFile(flags.ConfigFile)
@@ -70,6 +100,11 @@ var RootCmd = &cobra.Command{
 				return fmt.Errorf("failed to parse config file: %w", err)
 			}
 		}
+		// 2. 命令行显式参数优先级高于配置文件，环境变量优先级最高
+		for _, apply := range cliOverrides {
+			apply(flags)
+		}
+		loadFromEnv()
 		if flags.PreferIPVersion != "" && flags.PreferIPVersion != "4" && flags.PreferIPVersion != "6" {
 			return fmt.Errorf("invalid --prefer-ip-version value %q: expected 4 or 6", flags.PreferIPVersion)
 		}
@@ -224,6 +259,27 @@ func init() {
 	RootCmd.PersistentFlags().BoolVar(&flags.DisableCompression, "disable-compression", false, "Disable v2 gzip/permessage-deflate compression")
 	RootCmd.PersistentFlags().StringVar(&flags.PreferIPVersion, "prefer-ip-version", "", "Prefer IP version for dashboard connections: 4 or 6")
 	RootCmd.PersistentFlags().ParseErrorsWhitelist.UnknownFlags = true
+}
+
+func findDefaultConfigFile() string {
+	candidates := []string{
+		"config.json",
+	}
+	if exePath, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exePath), "config.json"))
+	}
+	candidates = append(candidates,
+		"/etc/komari-agent/config.json",
+		"/opt/komari-agent/config.json",
+		"/etc/komari/config.json",
+		"/opt/komari/config.json",
+	)
+	for _, path := range candidates {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path
+		}
+	}
+	return ""
 }
 
 func loadFromEnv() {

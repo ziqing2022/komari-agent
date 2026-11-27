@@ -17,6 +17,7 @@ import (
 
 	"github.com/blang/semver"
 	"github.com/rhysd/go-github-selfupdate/selfupdate"
+	pkg_flags "github.com/ziqing2022/komari-agent/cmd/flags"
 	"github.com/ziqing2022/komari-agent/dnsresolver"
 )
 
@@ -79,14 +80,7 @@ type containerCheck func() bool
 func parseVersion(ver string) (semver.Version, error) {
 	ver = strings.TrimPrefix(ver, "v")
 	ver = strings.TrimPrefix(ver, "V")
-	v, err := semver.ParseTolerant(ver)
-	if err != nil {
-		// 若为 Git Commit Hash 或非规范版本，平滑降级为基线版本 1.2.13，防止阻断运行
-		if defaultV, dErr := semver.ParseTolerant("1.2.13"); dErr == nil {
-			return defaultV, nil
-		}
-	}
-	return v, err
+	return semver.ParseTolerant(ver)
 }
 
 // needUpdate 判断是否需要更新
@@ -305,6 +299,7 @@ func splitRepoSlug(slug string) (string, string, error) {
 
 func listGitHubReleases(owner, repo string) ([]githubRelease, error) {
 	var releases []githubRelease
+	client := newGitHubHTTPClient()
 
 	for page := 1; ; page++ {
 		endpoint := fmt.Sprintf(
@@ -325,7 +320,7 @@ func listGitHubReleases(owner, repo string) ([]githubRelease, error) {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list GitHub releases: %w", err)
 		}
@@ -498,11 +493,19 @@ func checkAndUpdateSnapshot(updater selfUpdater, listReleases releaseLister, isC
 	return ErrRestartRequired
 }
 
+func newGitHubHTTPClient() *http.Client {
+	preferIP := ""
+	if pkg_flags.GlobalConfig != nil {
+		preferIP = pkg_flags.GlobalConfig.PreferIPVersion
+	}
+	return dnsresolver.GetHTTPClientWithPreference(60*time.Second, preferIP)
+}
+
 // 检查更新并执行自动更新
 func CheckAndUpdate() error {
 	log.Println("Checking update...")
 
-	http.DefaultClient = dnsresolver.GetHTTPClient(60 * time.Second)
+	http.DefaultClient = newGitHubHTTPClient()
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{})
 	if err != nil {
 		return fmt.Errorf("failed to create updater: %v", err)
@@ -529,7 +532,7 @@ func SwitchToVersion(targetVersion string) error {
 		return nil
 	}
 
-	http.DefaultClient = dnsresolver.GetHTTPClient(60 * time.Second)
+	http.DefaultClient = newGitHubHTTPClient()
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{})
 	if err != nil {
 		return fmt.Errorf("failed to create updater: %v", err)

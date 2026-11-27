@@ -40,27 +40,70 @@ func NewTask(task_id, command string) {
 	uploadTaskResult(task_id, result, exitCode, time.Now())
 }
 
+const (
+	maxTaskCommandTimeout = 5 * time.Minute
+	maxTaskOutputBytes    = 2 * 1024 * 1024
+)
+
+type limitedTaskBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *limitedTaskBuffer) Write(p []byte) (int, error) {
+	if b.limit <= 0 || b.buf.Len() < b.limit {
+		remaining := len(p)
+		if b.limit > 0 && b.buf.Len()+remaining > b.limit {
+			remaining = b.limit - b.buf.Len()
+			b.truncated = true
+		}
+		if remaining > 0 {
+			_, _ = b.buf.Write(p[:remaining])
+		}
+	} else {
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+func (b *limitedTaskBuffer) String() string {
+	s := b.buf.String()
+	if b.truncated {
+		s += "\n...[output truncated due to size limit]"
+	}
+	return s
+}
+
 func runTaskCommand(command string) (string, int) {
-	cmd, cleanup, err := buildTaskCommand(command)
+	ctx, cancel := context.WithTimeout(context.Background(), maxTaskCommandTimeout)
+	defer cancel()
+
+	cmd, cleanup, err := buildTaskCommand(ctx, command)
 	if err != nil {
 		return err.Error(), -1
 	}
 	defer cleanup()
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.WaitDelay = 5 * time.Second
+	stdout := &limitedTaskBuffer{limit: maxTaskOutputBytes}
+	stderr := &limitedTaskBuffer{limit: maxTaskOutputBytes}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	err = cmd.Run()
 
 	result := stdout.String()
-	if stderr.Len() > 0 {
+	if stderr.buf.Len() > 0 {
 		result = appendErrorResult(result, stderr.String())
 	}
 	result = strings.ReplaceAll(result, "\r\n", "\n")
 	exitCode := 0
 	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			result = appendErrorResult(result, "command execution timed out")
+			exitCode = -1
+		} else if exitError, ok := err.(*exec.ExitError); ok {
 			exitCode = exitError.ExitCode()
 		} else {
 			result = appendErrorResult(result, err.Error())
@@ -71,7 +114,7 @@ func runTaskCommand(command string) (string, int) {
 	return result, exitCode
 }
 
-func buildTaskCommand(command string) (*exec.Cmd, func(), error) {
+func buildTaskCommand(ctx context.Context, command string) (*exec.Cmd, func(), error) {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		scriptFile, err := os.CreateTemp("", "komari-task-*.ps1")
@@ -96,10 +139,10 @@ func buildTaskCommand(command string) (*exec.Cmd, func(), error) {
 			cleanup()
 			return nil, func() {}, err
 		}
-		cmd = exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptFile.Name())
+		cmd = exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptFile.Name())
 		return cmd, cleanup, nil
 	} else {
-		cmd = exec.Command("sh", "-s")
+		cmd = exec.CommandContext(ctx, "sh", "-s")
 		cmd.Stdin = strings.NewReader(command)
 	}
 	return cmd, func() {}, nil
@@ -330,7 +373,8 @@ func postV2RPC(payload interface{}) error {
 	if err != nil {
 		return err
 	}
-	endpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/v2/rpc?token=" + flags.Token
+	activeEndpoint := Failover.GetActiveEndpoint()
+	endpoint := strings.TrimSuffix(activeEndpoint, "/") + "/api/clients/v2/rpc?token=" + flags.Token
 	compressed := false
 	if !flags.DisableCompression {
 		if gz, err := gzipBytes(body); err == nil {
@@ -349,6 +393,7 @@ func postV2RPC(payload interface{}) error {
 	client := dnsresolver.GetHTTPClientWithPreference(30*time.Second, flags.PreferIPVersion)
 	resp, err := client.Do(req)
 	if err != nil {
+		Failover.OnFailure(err)
 		return err
 	}
 	defer resp.Body.Close()
@@ -357,8 +402,11 @@ func postV2RPC(payload interface{}) error {
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return &httpStatusError{StatusCode: resp.StatusCode, Status: resp.Status, Body: string(respBody)}
+		httpErr := &httpStatusError{StatusCode: resp.StatusCode, Status: resp.Status, Body: string(respBody)}
+		Failover.OnFailure(httpErr)
+		return httpErr
 	}
+	Failover.OnSuccess(activeEndpoint)
 	if len(bytes.TrimSpace(respBody)) > 0 {
 		if _, err := parseV2Response(respBody); err != nil {
 			return err

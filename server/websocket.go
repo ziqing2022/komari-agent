@@ -143,15 +143,27 @@ func buildWebSocketEndpoint() string {
 	return Failover.GetActiveWebSocketEndpoint()
 }
 
+func safeReconnectDuration() time.Duration {
+	d := time.Duration(flags.ReconnectInterval) * time.Second
+	if d < 2*time.Second {
+		return 5 * time.Second
+	}
+	return d
+}
+
 func runPostFallback(websocketEndpoint string, interval float64) (*ws.SafeConn, error) {
 	log.Println("Entering v2 POST fallback mode")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go runV2PullLoop(ctx)
 
-	reportTicker := time.NewTicker(time.Duration(interval * float64(time.Second)))
+	reportInterval := time.Duration(interval * float64(time.Second))
+	if reportInterval < time.Second {
+		reportInterval = time.Second
+	}
+	reportTicker := time.NewTicker(reportInterval)
 	defer reportTicker.Stop()
-	reconnectTicker := time.NewTicker(time.Duration(flags.ReconnectInterval) * time.Second)
+	reconnectTicker := time.NewTicker(safeReconnectDuration())
 	defer reconnectTicker.Stop()
 
 	for {
@@ -162,16 +174,24 @@ func runPostFallback(websocketEndpoint string, interval float64) (*ws.SafeConn, 
 			resp, err := postV2Request(v2.BuildReportRequest(reportID, monitoring.GenerateReport(), ackIDs))
 			if err != nil {
 				log.Println("Failed to POST v2 report:", err)
+				Failover.OnFailure(err)
 				continue
 			}
+			Failover.OnSuccess(Failover.GetActiveEndpoint())
 			clearV2AckEventIDs(ackIDs)
 			processV2ResponseEvents(resp)
 		case <-reconnectTicker.C:
-			conn, err := connectWebSocket(websocketEndpoint)
+			targetWS := buildWebSocketEndpoint()
+			if targetWS == "" {
+				targetWS = websocketEndpoint
+			}
+			conn, err := connectWebSocket(targetWS)
 			if err == nil {
+				Failover.OnSuccess(Failover.GetActiveEndpoint())
 				return conn, nil
 			}
-			log.Println("POST fallback WebSocket recovery failed:", err)
+			Failover.OnFailure(err)
+			log.Println("POST fallback WebSocket recovery failed:", safeError(err))
 		}
 	}
 }
@@ -195,7 +215,8 @@ func runV2PullLoop(ctx context.Context) {
 				return
 			}
 			log.Println("Failed to POST v2 pull:", err)
-			timer := time.NewTimer(time.Duration(flags.ReconnectInterval) * time.Second)
+			Failover.OnFailure(err)
+			timer := time.NewTimer(safeReconnectDuration())
 			select {
 			case <-ctx.Done():
 				timer.Stop()
@@ -204,6 +225,7 @@ func runV2PullLoop(ctx context.Context) {
 			}
 			continue
 		}
+		Failover.OnSuccess(Failover.GetActiveEndpoint())
 		clearV2AckEventIDs(ackIDs)
 		processV2ResponseEvents(resp)
 	}
@@ -348,12 +370,21 @@ func connectWebSocket(websocketEndpoint string) (*ws.SafeConn, error) {
 
 func handleWebSocketMessages(conn *ws.SafeConn, done chan<- struct{}) {
 	defer close(done)
+	// 心跳每 30 秒发送一次 Ping；超过 90 秒无任何响应或 Pong 则判定为静默半开断链
+	const wsReadTimeout = 90 * time.Second
+	if rawConn := conn.GetConn(); rawConn != nil {
+		_ = rawConn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+		rawConn.SetPongHandler(func(string) error {
+			return rawConn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+		})
+	}
 	for {
 		_, message_raw, err := conn.ReadMessage()
 		if err != nil {
 			log.Println("WebSocket read error:", err)
 			return
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 		var message v2.Request
 		err = json.Unmarshal(message_raw, &message)
 		if err != nil {

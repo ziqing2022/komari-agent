@@ -139,7 +139,7 @@ if [ "$EUID" -ne 0 ] && [ "$install_dir_specified" = false ]; then
     esac
 fi
 
-komari_agent_path="${target_dir}/sser"
+komari_agent_path="${target_dir}/${service_name}"
 
 # User services are the only service type a non-root Linux installation can manage.
 if [ "$EUID" -ne 0 ] && [ "$os_name" = "linux" ]; then

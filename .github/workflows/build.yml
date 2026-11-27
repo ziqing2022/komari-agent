@@ -36,7 +36,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: go.mod
+
+      - name: Verify (vet & unit tests)
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          go vet ./...
+          go test -v ./update ./tunnel/...
 
       - name: Build binary
         env:
@@ -44,7 +50,7 @@ jobs:
           GOARCH: ${{ matrix.build_arch || matrix.goarch }}
           GOARM: ${{ matrix.goarm || '' }}
           CGO_ENABLED: 0
-          VERSION: "v1.2.13"
+          VERSION: "v1.2.15"
         run: |
           BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then

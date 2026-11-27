@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"context"
 	"fmt"
@@ -165,6 +166,62 @@ func downloadAndExtract(ctx context.Context, downloadURL, archiveName, targetBin
 			}
 		}
 		return fmt.Errorf("sing-box binary not found in archive")
+	}
+
+	// 处理 .zip (Windows 等平台)
+	if strings.HasSuffix(archiveName, ".zip") {
+		tmpZip := targetBinPath + ".zip.downloading"
+		_ = os.Remove(tmpZip)
+		defer os.Remove(tmpZip)
+
+		zipOut, err := os.OpenFile(tmpZip, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(zipOut, resp.Body); err != nil {
+			zipOut.Close()
+			return err
+		}
+		if err := zipOut.Close(); err != nil {
+			return err
+		}
+
+		zr, err := zip.OpenReader(tmpZip)
+		if err != nil {
+			return err
+		}
+		defer zr.Close()
+
+		for _, f := range zr.File {
+			if f.FileInfo().IsDir() {
+				continue
+			}
+			base := filepath.Base(f.Name)
+			if base == "sing-box" || base == "sing-box.exe" {
+				rc, err := f.Open()
+				if err != nil {
+					return err
+				}
+				out, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+				if err != nil {
+					rc.Close()
+					return err
+				}
+				_, copyErr := io.Copy(out, rc)
+				closeErr := out.Close()
+				_ = rc.Close()
+				if copyErr != nil {
+					_ = os.Remove(tmpFile)
+					return copyErr
+				}
+				if closeErr != nil {
+					_ = os.Remove(tmpFile)
+					return closeErr
+				}
+				return os.Rename(tmpFile, targetBinPath)
+			}
+		}
+		return fmt.Errorf("sing-box binary not found in zip archive")
 	}
 
 	// 简易直接流式写入

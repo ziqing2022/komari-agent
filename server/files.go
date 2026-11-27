@@ -807,12 +807,13 @@ func matchFileContent(path, query, lowerQuery string) (searchMatch, bool) {
 }
 
 func postFileResult(result v2.FileResult) {
-	endpoint := strings.TrimSuffix(flags.Endpoint, "/") +
-		"/api/clients/v2/rpc?token=" + flags.Token
 	body := v2.NewRequest(nil, v2.MethodAgentFileResult, result)
 	client := dnsresolver.GetHTTPClientWithPreference(60*time.Second, flags.PreferIPVersion)
 	const maxAttempts = 4
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		activeEndpoint := Failover.GetActiveEndpoint()
+		endpoint := strings.TrimSuffix(activeEndpoint, "/") +
+			"/api/clients/v2/rpc?token=" + flags.Token
 		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			log.Printf("failed to create file result request: %v", err)
@@ -825,6 +826,7 @@ func postFileResult(result v2.FileResult) {
 			_ = response.Body.Close()
 		}
 		if err == nil && response != nil && response.StatusCode >= 200 && response.StatusCode < 300 {
+			Failover.OnSuccess(activeEndpoint)
 			return
 		}
 		// A 4xx response is a definitive protocol/application rejection; retrying
@@ -832,6 +834,11 @@ func postFileResult(result v2.FileResult) {
 		if response != nil && response.StatusCode >= 400 && response.StatusCode < 500 {
 			log.Printf("file result endpoint returned %s", response.Status)
 			return
+		}
+		if err != nil {
+			Failover.OnFailure(err)
+		} else if response != nil {
+			Failover.OnFailure(&httpStatusError{StatusCode: response.StatusCode, Status: response.Status})
 		}
 		if attempt < maxAttempts {
 			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	pkg_flags "github.com/ziqing2022/komari-agent/cmd/flags"
 	"github.com/ziqing2022/komari-agent/utils"
 )
 
@@ -122,7 +123,9 @@ func (fm *FailoverManager) OnSuccess(usedEndpoint string) {
 		flags.Endpoints = newEndpoints
 
 		// 异步持久化到本地 config.json
-		go fm.saveConfigToFile()
+		cfgSnapshot := *flags
+		cfgSnapshot.Endpoints = append([]string(nil), flags.Endpoints...)
+		go fm.saveConfigToFile(cfgSnapshot)
 	}
 }
 
@@ -200,7 +203,9 @@ func (fm *FailoverManager) SyncEndpoints(newList []string) {
 		fm.currentIndex = 0
 		flags.Endpoint = validList[0]
 		flags.Endpoints = validList
-		go fm.saveConfigToFile()
+		cfgSnapshot := *flags
+		cfgSnapshot.Endpoints = append([]string(nil), flags.Endpoints...)
+		go fm.saveConfigToFile(cfgSnapshot)
 		log.Printf("[Failover] Synchronized %d active endpoints from master: %v", len(validList), validList)
 	}
 }
@@ -231,18 +236,18 @@ func isNetworkDead(err error) bool {
 }
 
 // saveConfigToFile 将当前最新的首选端点和列表持久化至本地配置文件
-func (fm *FailoverManager) saveConfigToFile() {
-	if flags.ConfigFile == "" {
+func (fm *FailoverManager) saveConfigToFile(cfg pkg_flags.Config) {
+	if cfg.ConfigFile == "" {
 		return
 	}
-	data, err := json.MarshalIndent(flags, "", "  ")
+	data, err := json.MarshalIndent(&cfg, "", "  ")
 	if err != nil {
 		log.Printf("[Failover] Failed to marshal config for saving: %v", err)
 		return
 	}
-	if err := os.WriteFile(flags.ConfigFile, data, 0644); err != nil {
-		log.Printf("[Failover] Failed to save updated config to %s: %v", flags.ConfigFile, err)
+	if err := os.WriteFile(cfg.ConfigFile, data, 0600); err != nil {
+		log.Printf("[Failover] Failed to save updated config to %s: %v", cfg.ConfigFile, err)
 	} else {
-		log.Printf("[Failover] Successfully persisted failover config to %s", flags.ConfigFile)
+		log.Printf("[Failover] Successfully persisted failover config to %s", cfg.ConfigFile)
 	}
 }
