@@ -79,7 +79,7 @@ func runTaskCommand(command string) (string, int) {
 	ctx, cancel := context.WithTimeout(context.Background(), maxTaskCommandTimeout)
 	defer cancel()
 
-	cmd, cleanup, err := buildTaskCommand(ctx, command)
+	cmd, cleanup, err := buildTaskCommandContext(ctx, command)
 	if err != nil {
 		return err.Error(), -1
 	}
@@ -114,7 +114,11 @@ func runTaskCommand(command string) (string, int) {
 	return result, exitCode
 }
 
-func buildTaskCommand(ctx context.Context, command string) (*exec.Cmd, func(), error) {
+func buildTaskCommand(command string) (*exec.Cmd, func(), error) {
+	return buildTaskCommandContext(context.Background(), command)
+}
+
+func buildTaskCommandContext(ctx context.Context, command string) (*exec.Cmd, func(), error) {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		scriptFile, err := os.CreateTemp("", "komari-task-*.ps1")
